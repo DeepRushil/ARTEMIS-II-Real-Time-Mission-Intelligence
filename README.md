@@ -191,12 +191,11 @@ This project demonstrates proficiency in:
 
 ## 📧 Contact
 
-**Rushil**
+**Deep Rushil**
 - Portfolio: [Your Portfolio URL]
-- LinkedIn: [Your LinkedIn]
-- GitHub: [Your GitHub]
+-  [LinkedIn](https://www.linkedin.com/in/deeprushil/)
 
 ---
 
-*Developed as part of MS in Computer Science (AI/ML & Data Science specialization)*
-*April 2026*
+*Developed as part of Personal project, Please educate if there is any error, I am still learning. Thank you*
+*April 2026, Bengaluru*
