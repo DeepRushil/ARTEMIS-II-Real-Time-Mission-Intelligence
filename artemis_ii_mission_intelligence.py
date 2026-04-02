@@ -7,6 +7,7 @@ A professional-grade Data Science portfolio project showcasing:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -549,47 +550,80 @@ def simulate_tli_burn(thrust_pct, burn_duration_sec, ignition_vector_deg):
 # JAVASCRIPT-BASED LIVE MET TIMER (CLIENT-SIDE, NO SERVER RELOAD)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_live_met_timer():
-    """Generate JavaScript-based MET timer that updates client-side"""
+def display_live_met_timer():
+    """Display JavaScript-based MET timer using Streamlit components for reliable execution"""
     launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
     
-    js_code = f"""
-    <div class="met-display" id="met-timer">
-        <span id="met-value">Calculating...</span>
-        <div style="font-size: 0.8rem; color: rgba(255,215,0,0.7); margin-top: 0.5rem;">
-            DAYS : HOURS : MINS : SECS
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+            
+            body {{
+                margin: 0;
+                padding: 0;
+                background: transparent;
+            }}
+            
+            .met-display {{
+                font-family: 'Space Mono', monospace;
+                font-size: 2rem;
+                font-weight: 700;
+                color: #ffd700;
+                text-align: center;
+                padding: 1rem;
+                background: rgba(255,215,0,0.1);
+                border: 2px solid #ffd700;
+                border-radius: 10px;
+                text-shadow: 0 0 15px rgba(255,215,0,0.5);
+            }}
+            
+            .met-label {{
+                font-size: 0.8rem;
+                color: rgba(255,215,0,0.7);
+                margin-top: 0.5rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="met-display">
+            <div id="met-value">00:00:00:00</div>
+            <div class="met-label">DAYS : HOURS : MINS : SECS</div>
         </div>
-    </div>
-    
-    <script>
-        function updateMET() {{
-            const launchTime = {launch_timestamp_ms};
-            const now = Date.now();
-            const elapsed = Math.max(0, now - launchTime);
-            
-            const days = Math.floor(elapsed / (1000 * 60 * 60 * 24));
-            const hours = Math.floor((elapsed % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
-            
-            const metString = 
-                String(days).padStart(2, '0') + ':' +
-                String(hours).padStart(2, '0') + ':' +
-                String(minutes).padStart(2, '0') + ':' +
-                String(seconds).padStart(2, '0');
-            
-            document.getElementById('met-value').textContent = metString;
-        }}
         
-        // Update immediately
-        updateMET();
-        
-        // Update every second
-        setInterval(updateMET, 1000);
-    </script>
+        <script>
+            function updateMET() {{
+                const launchTime = {launch_timestamp_ms};
+                const now = Date.now();
+                const elapsed = Math.max(0, now - launchTime);
+                
+                const days = Math.floor(elapsed / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((elapsed % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
+                
+                const metString = 
+                    String(days).padStart(2, '0') + ':' +
+                    String(hours).padStart(2, '0') + ':' +
+                    String(minutes).padStart(2, '0') + ':' +
+                    String(seconds).padStart(2, '0');
+                
+                document.getElementById('met-value').textContent = metString;
+            }}
+            
+            // Update immediately
+            updateMET();
+            
+            // Update every second
+            setInterval(updateMET, 1000);
+        </script>
+    </body>
+    </html>
     """
     
-    return js_code
+    components.html(html_code, height=120)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HEADER & MISSION BRANDING
@@ -649,7 +683,7 @@ with st.sidebar:
     st.markdown("### ⏱️ MISSION ELAPSED TIME")
     
     # Live MET counter (JavaScript-based, client-side updates)
-    st.markdown(get_live_met_timer(), unsafe_allow_html=True)
+    display_live_met_timer()
     
     st.markdown("---")
     st.markdown("### 🎯 MILESTONE STATUS")
@@ -678,15 +712,15 @@ with tab1:
     st.markdown("### 📊 Real-Time Telemetry Analysis")
     
     # Use fragment for auto-refreshing content without full page reload
-    @st.fragment(run_every="3s")
+    @st.fragment(run_every="1s")
     def live_telemetry_display():
-        """Fragment that auto-refreshes every 5 seconds without full page reload"""
+        """Fragment that auto-refreshes every 1 second for real-time updates"""
         
         # Display data source
         if 'current_telemetry' in st.session_state:
             source = st.session_state.current_telemetry.get('source', 'calculated_profile')
             if source == 'calculated_profile':
-                st.info("⚙️ **Data Source**: Mission profile calculations • Auto-refresh: 5s")
+                st.info("⚙️ **Data Source**: Mission profile calculations • Real-time updates: 1s")
         
         # Fetch telemetry
         telemetry_df = get_live_telemetry()
@@ -1054,7 +1088,7 @@ st.markdown("""
         <span class="tech-badge">Physics-Based Simulation</span>
     </div>
     <p style="margin-top: 1.5rem; font-size: 0.75rem; color: rgba(255,255,255,0.4);">
-        Developed by Rushil | Portfolio Project | April 2026
+        Developed by Deep Rushil | Portfolio Project | April 2026
     </p>
 </div>
 """, unsafe_allow_html=True)
