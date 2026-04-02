@@ -169,25 +169,7 @@ This project demonstrates proficiency in:
 - Production-grade software development (modular code, documentation)
 - UI/UX design (custom CSS, theming)
 
-## 📝 Portfolio Integration
 
-### Resume Highlights
-- "Built real-time mission intelligence dashboard using Bayesian inference and ensemble ML"
-- "Implemented voting ensemble (Isolation Forest + One-Class SVM) achieving X% anomaly detection accuracy"
-- "Developed physics-based orbital simulator with interactive Streamlit interface"
-
-### Interview Talking Points
-1. **Bayesian Approach**: "I chose Beta-Binomial because it naturally represents binary outcomes (success/failure) and updates elegantly with new evidence"
-2. **Ensemble Method**: "Voting between Isolation Forest and SVM reduces false positives while maintaining sensitivity"
-3. **Design Decisions**: "Custom CSS theme creates professional, memorable user experience aligned with mission context"
-
-## 🔮 Future Enhancements
-
-- [ ] Connect to actual NASA API endpoints
-- [ ] Add ML model explainability (SHAP values)
-- [ ] Implement time-series forecasting for trajectory prediction
-- [ ] Add real-time data streaming with WebSocket
-- [ ] Deploy to cloud (AWS/GCP/Azure) with CI/CD pipeline
 
 ## 📧 Contact
 
