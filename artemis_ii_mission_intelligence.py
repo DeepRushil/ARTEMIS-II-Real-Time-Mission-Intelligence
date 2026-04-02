@@ -16,7 +16,6 @@ from scipy import stats
 from sklearn.ensemble import IsolationForest
 from sklearn.svm import OneClassSVM
 import json
-import time
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION & STYLING
@@ -111,7 +110,7 @@ CUSTOM_CSS = """
         margin-top: 0.5rem;
     }
     
-    /* Crew Profile Cards */
+    /* Crew Profile Cards - Clickable */
     .crew-card {
         background: rgba(255,255,255,0.05);
         border: 1px solid rgba(0,212,255,0.3);
@@ -119,12 +118,16 @@ CUSTOM_CSS = """
         padding: 1rem;
         margin: 1rem 0;
         transition: all 0.3s ease;
+        cursor: pointer;
+        text-decoration: none;
+        display: block;
     }
     
     .crew-card:hover {
         background: rgba(0,212,255,0.1);
         border-color: #00d4ff;
         box-shadow: 0 0 20px rgba(0,212,255,0.3);
+        transform: translateY(-2px);
     }
     
     .crew-name {
@@ -231,25 +234,29 @@ CREW_DATA = [
         "name": "Reid Wiseman",
         "role": "Commander",
         "bio": "NASA astronaut with ISS experience (Expedition 40/41). Led spacewalks and served as Chief of the Astronaut Office.",
-        "emoji": "👨‍🚀"
+        "emoji": "👨‍🚀",
+        "url": "https://www.nasa.gov/people/reid-wiseman/"
     },
     {
         "name": "Victor Glover",
         "role": "Pilot",
         "bio": "Naval aviator and NASA astronaut. First African American to serve on ISS long-duration crew (SpaceX Crew-1).",
-        "emoji": "👨‍✈️"
+        "emoji": "👨‍✈️",
+        "url": "https://www.nasa.gov/humans-in-space/astronauts/victor-j-glover/"
     },
     {
         "name": "Christina Koch",
         "role": "Mission Specialist",
         "bio": "Holds record for longest single spaceflight by a woman (328 days). Conducted first all-female spacewalk.",
-        "emoji": "👩‍🚀"
+        "emoji": "👩‍🚀",
+        "url": "https://www.nasa.gov/humans-in-space/astronauts/christina-koch/"
     },
     {
         "name": "Jeremy Hansen",
         "role": "Mission Specialist",
         "bio": "CSA astronaut and CF-18 fighter pilot. First Canadian to travel beyond low Earth orbit.",
-        "emoji": "👨‍🚀"
+        "emoji": "👨‍🚀",
+        "url": "https://www.asc-csa.gc.ca/eng/astronauts/canadian/active/bio-jeremy-hansen.asp"
     }
 ]
 
@@ -298,53 +305,6 @@ if 'bayesian_model' not in st.session_state:
 # ═══════════════════════════════════════════════════════════════════════════
 # TELEMETRY & ANOMALY DETECTION
 # ═══════════════════════════════════════════════════════════════════════════
-
-def fetch_nasa_arow_data():
-    """
-    Fetch real-time telemetry from NASA AROW or third-party trackers
-    Primary: artemislivetracker.com API
-    Fallback: Calculated data based on known mission profile
-    """
-    try:
-        # Try artemislivetracker.com API (community tracker using NASA data)
-        response = requests.get(
-            "https://artemislivetracker.com/api/telemetry",
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                'distance_earth_km': data.get('distance_from_earth', 0),
-                'distance_moon_km': data.get('distance_from_moon', 0),
-                'velocity_km_s': data.get('velocity', 0),
-                'altitude_km': data.get('altitude', 0),
-                'met_seconds': data.get('mission_elapsed_time', 0),
-                'source': 'artemislivetracker.com'
-            }
-    except:
-        pass
-    
-    try:
-        # Try artemislive.org API
-        response = requests.get(
-            "https://artemislive.org/api/current",
-            timeout=5
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                'distance_earth_km': data.get('earthDistance', 0),
-                'distance_moon_km': data.get('moonDistance', 0),
-                'velocity_km_s': data.get('velocity', 0),
-                'altitude_km': data.get('altitude', 0),
-                'met_seconds': data.get('met', 0),
-                'source': 'artemislive.org'
-            }
-    except:
-        pass
-    
-    # Fallback: Calculate based on known mission profile and current time
-    return calculate_mission_profile()
 
 def calculate_mission_profile():
     """
@@ -419,7 +379,7 @@ def get_live_telemetry():
     Returns: DataFrame with timestamp, altitude, velocity
     """
     # Get current real-time data
-    current_data = fetch_nasa_arow_data()
+    current_data = calculate_mission_profile()
     
     # Build trajectory history from launch to now
     current_time = datetime.utcnow()
@@ -586,6 +546,52 @@ def simulate_tli_burn(thrust_pct, burn_duration_sec, ignition_vector_deg):
     return outcome, success, trajectory_df
 
 # ═══════════════════════════════════════════════════════════════════════════
+# JAVASCRIPT-BASED LIVE MET TIMER (CLIENT-SIDE, NO SERVER RELOAD)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_live_met_timer():
+    """Generate JavaScript-based MET timer that updates client-side"""
+    launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
+    
+    js_code = f"""
+    <div class="met-display" id="met-timer">
+        <span id="met-value">Calculating...</span>
+        <div style="font-size: 0.8rem; color: rgba(255,215,0,0.7); margin-top: 0.5rem;">
+            DAYS : HOURS : MINS : SECS
+        </div>
+    </div>
+    
+    <script>
+        function updateMET() {{
+            const launchTime = {launch_timestamp_ms};
+            const now = Date.now();
+            const elapsed = Math.max(0, now - launchTime);
+            
+            const days = Math.floor(elapsed / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((elapsed % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
+            
+            const metString = 
+                String(days).padStart(2, '0') + ':' +
+                String(hours).padStart(2, '0') + ':' +
+                String(minutes).padStart(2, '0') + ':' +
+                String(seconds).padStart(2, '0');
+            
+            document.getElementById('met-value').textContent = metString;
+        }}
+        
+        // Update immediately
+        updateMET();
+        
+        // Update every second
+        setInterval(updateMET, 1000);
+    </script>
+    """
+    
+    return js_code
+
+# ═══════════════════════════════════════════════════════════════════════════
 # HEADER & MISSION BRANDING
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -631,35 +637,19 @@ with st.sidebar:
     
     for crew in CREW_DATA:
         st.markdown(f"""
-        <div class="crew-card">
+        <a href="{crew['url']}" target="_blank" class="crew-card">
             <div style="font-size: 2.5rem; text-align: center; margin-bottom: 0.5rem;">{crew['emoji']}</div>
             <div class="crew-name">{crew['name']}</div>
             <div class="crew-role">{crew['role']}</div>
             <div class="crew-bio">{crew['bio']}</div>
-        </div>
+        </a>
         """, unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("### ⏱️ MISSION ELAPSED TIME")
     
-    # Live MET counter
-    current_time = datetime.utcnow()
-    elapsed = current_time - MISSION_LAUNCH_UTC
-    
-    days = elapsed.days
-    hours, remainder = divmod(elapsed.seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    
-    met_string = f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
-    
-    st.markdown(f"""
-    <div class="met-display">
-        {met_string}
-        <div style="font-size: 0.8rem; color: rgba(255,215,0,0.7); margin-top: 0.5rem;">
-            DAYS : HOURS : MINS : SECS
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Live MET counter (JavaScript-based, client-side updates)
+    st.markdown(get_live_met_timer(), unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("### 🎯 MILESTONE STATUS")
@@ -681,213 +671,219 @@ with st.sidebar:
 tab1, tab2 = st.tabs(["📡 Live Mission Feed", "🧪 Strategic Simulation"])
 
 # ───────────────────────────────────────────────────────────────────────────
-# TAB 1: LIVE MISSION FEED (GROUND TRUTH)
+# TAB 1: LIVE MISSION FEED (AUTO-REFRESHING)
 # ───────────────────────────────────────────────────────────────────────────
 
 with tab1:
     st.markdown("### 📊 Real-Time Telemetry Analysis")
     
-    # Display data source
-    if 'current_telemetry' in st.session_state:
-        source = st.session_state.current_telemetry.get('source', 'calculated_profile')
-        if source == 'calculated_profile':
-            st.info("⚙️ **Data Source**: Mission profile calculations (API endpoints unavailable)")
-        else:
-            st.success(f"🛰️ **Live Data Source**: {source} - Real-time telemetry active")
-    
-    # Fetch telemetry
-    telemetry_df = get_live_telemetry()
-    
-    # Anomaly detection
-    anomaly_scores, anomaly_predictions = detect_anomalies(telemetry_df)
-    telemetry_df['anomaly_score'] = anomaly_scores
-    telemetry_df['is_anomaly'] = anomaly_predictions == -1
-    
-    # Display metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    # Get current real-time data
-    current_data = st.session_state.get('current_telemetry', {})
-    
-    with col1:
-        current_altitude = telemetry_df.iloc[-1]['altitude_km']
-        st.metric(
-            "Current Altitude",
-            f"{current_altitude:,.0f} km",
-            delta=f"+{telemetry_df.iloc[-1]['altitude_km'] - telemetry_df.iloc[-2]['altitude_km']:.0f} km"
-        )
-    
-    with col2:
-        current_velocity = telemetry_df.iloc[-1]['velocity_km_s']
-        st.metric(
-            "Current Velocity",
-            f"{current_velocity:.2f} km/s",
-            delta=f"{telemetry_df.iloc[-1]['velocity_km_s'] - telemetry_df.iloc[-2]['velocity_km_s']:.3f} km/s"
-        )
-    
-    with col3:
-        distance_earth = current_data.get('distance_earth_km', current_altitude)
-        st.metric(
-            "Distance from Earth",
-            f"{distance_earth:,.0f} km",
-            delta=f"{distance_earth/6371:.1f} Earth radii"
-        )
-    
-    with col4:
-        distance_moon = current_data.get('distance_moon_km', 384400 - current_altitude)
-        st.metric(
-            "Distance to Moon",
-            f"{distance_moon:,.0f} km",
-            delta=f"{100 * (1 - distance_moon/384400):.1f}% closer"
-        )
-    
-    with col5:
-        anomaly_count = telemetry_df['is_anomaly'].sum()
-        anomaly_pct = (anomaly_count / len(telemetry_df)) * 100
-        avg_anomaly_score = telemetry_df['anomaly_score'].mean()
-        status = "NOMINAL" if avg_anomaly_score < 0.3 else "CAUTION"
-        st.metric(
-            "Flight Status",
-            status,
-            delta=f"Anomaly: {anomaly_pct:.1f}%"
-        )
-    
-    # Trajectory visualization
-    st.markdown("#### 🛰️ High Earth Orbit Trajectory")
-    
-    fig_trajectory = go.Figure()
-    
-    # Nominal trajectory
-    fig_trajectory.add_trace(go.Scatter(
-        x=telemetry_df['met_hours'],
-        y=telemetry_df['altitude_km'],
-        mode='lines',
-        name='Altitude Profile',
-        line=dict(color='#00d4ff', width=3),
-        hovertemplate='<b>MET:</b> %{x:.2f} hrs<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
-    ))
-    
-    # Highlight anomalies
-    anomaly_points = telemetry_df[telemetry_df['is_anomaly']]
-    if len(anomaly_points) > 0:
+    # Use fragment for auto-refreshing content without full page reload
+    @st.fragment(run_every="3s")
+    def live_telemetry_display():
+        """Fragment that auto-refreshes every 5 seconds without full page reload"""
+        
+        # Display data source
+        if 'current_telemetry' in st.session_state:
+            source = st.session_state.current_telemetry.get('source', 'calculated_profile')
+            if source == 'calculated_profile':
+                st.info("⚙️ **Data Source**: Mission profile calculations • Auto-refresh: 5s")
+        
+        # Fetch telemetry
+        telemetry_df = get_live_telemetry()
+        
+        # Anomaly detection
+        anomaly_scores, anomaly_predictions = detect_anomalies(telemetry_df)
+        telemetry_df['anomaly_score'] = anomaly_scores
+        telemetry_df['is_anomaly'] = anomaly_predictions == -1
+        
+        # Display metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        # Get current real-time data
+        current_data = st.session_state.get('current_telemetry', {})
+        
+        with col1:
+            current_altitude = telemetry_df.iloc[-1]['altitude_km']
+            st.metric(
+                "Current Altitude",
+                f"{current_altitude:,.0f} km",
+                delta=f"+{telemetry_df.iloc[-1]['altitude_km'] - telemetry_df.iloc[-2]['altitude_km']:.0f} km"
+            )
+        
+        with col2:
+            current_velocity = telemetry_df.iloc[-1]['velocity_km_s']
+            st.metric(
+                "Current Velocity",
+                f"{current_velocity:.2f} km/s",
+                delta=f"{telemetry_df.iloc[-1]['velocity_km_s'] - telemetry_df.iloc[-2]['velocity_km_s']:.3f} km/s"
+            )
+        
+        with col3:
+            distance_earth = current_data.get('distance_earth_km', current_altitude)
+            st.metric(
+                "Distance from Earth",
+                f"{distance_earth:,.0f} km",
+                delta=f"{distance_earth/6371:.1f} Earth radii"
+            )
+        
+        with col4:
+            distance_moon = current_data.get('distance_moon_km', 384400 - current_altitude)
+            st.metric(
+                "Distance to Moon",
+                f"{distance_moon:,.0f} km",
+                delta=f"{100 * (1 - distance_moon/384400):.1f}% closer"
+            )
+        
+        with col5:
+            anomaly_count = telemetry_df['is_anomaly'].sum()
+            anomaly_pct = (anomaly_count / len(telemetry_df)) * 100
+            avg_anomaly_score = telemetry_df['anomaly_score'].mean()
+            status = "NOMINAL" if avg_anomaly_score < 0.3 else "CAUTION"
+            st.metric(
+                "Flight Status",
+                status,
+                delta=f"Anomaly: {anomaly_pct:.1f}%"
+            )
+        
+        # Trajectory visualization
+        st.markdown("#### 🛰️ High Earth Orbit Trajectory")
+        
+        fig_trajectory = go.Figure()
+        
+        # Nominal trajectory
         fig_trajectory.add_trace(go.Scatter(
-            x=anomaly_points['met_hours'],
-            y=anomaly_points['altitude_km'],
-            mode='markers',
-            name='Detected Anomalies',
-            marker=dict(color='#ff0000', size=10, symbol='x'),
-            hovertemplate='<b>⚠️ ANOMALY</b><br>MET: %{x:.2f} hrs<br>Altitude: %{y:,.0f} km<extra></extra>'
-        ))
-    
-    fig_trajectory.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#ffffff', family='Rajdhani'),
-        xaxis=dict(
-            title='Mission Elapsed Time (hours)',
-            gridcolor='rgba(255,255,255,0.1)',
-            showgrid=True
-        ),
-        yaxis=dict(
-            title='Altitude (km)',
-            gridcolor='rgba(255,255,255,0.1)',
-            showgrid=True
-        ),
-        hovermode='x unified',
-        height=500
-    )
-    
-    st.plotly_chart(fig_trajectory, use_container_width=True)
-    
-    # Anomaly detection gauge
-    st.markdown("#### 🔍 ML Anomaly Detection Ensemble")
-    st.markdown("*Voting ensemble: Isolation Forest + One-Class SVM*")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Velocity vs Altitude scatter
-        fig_scatter = go.Figure()
-        
-        # Normal points
-        normal_points = telemetry_df[~telemetry_df['is_anomaly']]
-        fig_scatter.add_trace(go.Scatter(
-            x=normal_points['velocity_km_s'],
-            y=normal_points['altitude_km'],
-            mode='markers',
-            name='Nominal',
-            marker=dict(
-                color=normal_points['anomaly_score'],
-                colorscale='Viridis',
-                size=8,
-                colorbar=dict(title='Anomaly<br>Score')
-            ),
-            hovertemplate='<b>Velocity:</b> %{x:.2f} km/s<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+            x=telemetry_df['met_hours'],
+            y=telemetry_df['altitude_km'],
+            mode='lines',
+            name='Altitude Profile',
+            line=dict(color='#00d4ff', width=3),
+            hovertemplate='<b>MET:</b> %{x:.2f} hrs<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
         ))
         
-        # Anomaly points
+        # Highlight anomalies
+        anomaly_points = telemetry_df[telemetry_df['is_anomaly']]
         if len(anomaly_points) > 0:
-            fig_scatter.add_trace(go.Scatter(
-                x=anomaly_points['velocity_km_s'],
+            fig_trajectory.add_trace(go.Scatter(
+                x=anomaly_points['met_hours'],
                 y=anomaly_points['altitude_km'],
                 mode='markers',
-                name='Anomaly',
-                marker=dict(color='#ff0000', size=12, symbol='x'),
-                hovertemplate='<b>⚠️ ANOMALY</b><br>Velocity: %{x:.2f} km/s<br>Altitude: %{y:,.0f} km<extra></extra>'
+                name='Detected Anomalies',
+                marker=dict(color='#ff0000', size=10, symbol='x'),
+                hovertemplate='<b>⚠️ ANOMALY</b><br>MET: %{x:.2f} hrs<br>Altitude: %{y:,.0f} km<extra></extra>'
             ))
         
-        fig_scatter.update_layout(
-            title='Feature Space Analysis',
+        fig_trajectory.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color='#ffffff', family='Rajdhani'),
-            xaxis=dict(title='Velocity (km/s)', gridcolor='rgba(255,255,255,0.1)'),
-            yaxis=dict(title='Altitude (km)', gridcolor='rgba(255,255,255,0.1)'),
-            height=400
+            xaxis=dict(
+                title='Mission Elapsed Time (hours)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True
+            ),
+            yaxis=dict(
+                title='Altitude (km)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True
+            ),
+            hovermode='x unified',
+            height=500
         )
         
-        st.plotly_chart(fig_scatter, use_container_width=True)
-    
-    with col2:
-        # Anomaly score gauge
-        current_anomaly_score = telemetry_df.iloc[-1]['anomaly_score']
+        st.plotly_chart(fig_trajectory, use_container_width=True, key=f"trajectory_{datetime.now().timestamp()}")
         
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=current_anomaly_score * 100,
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': "Current Anomaly Score", 'font': {'size': 20, 'color': '#ffffff'}},
-            delta={'reference': 30, 'increasing': {'color': '#ff0000'}, 'decreasing': {'color': '#00ff00'}},
-            gauge={
-                'axis': {'range': [0, 100], 'tickcolor': '#ffffff'},
-                'bar': {'color': '#00d4ff'},
-                'bgcolor': 'rgba(0,0,0,0.3)',
-                'borderwidth': 2,
-                'bordercolor': '#ffffff',
-                'steps': [
-                    {'range': [0, 30], 'color': 'rgba(0,255,0,0.2)'},
-                    {'range': [30, 70], 'color': 'rgba(255,215,0,0.2)'},
-                    {'range': [70, 100], 'color': 'rgba(255,0,0,0.2)'}
-                ],
-                'threshold': {
-                    'line': {'color': 'red', 'width': 4},
-                    'thickness': 0.75,
-                    'value': 70
+        # Anomaly detection gauge
+        st.markdown("#### 🔍 ML Anomaly Detection Ensemble")
+        st.markdown("*Voting ensemble: Isolation Forest + One-Class SVM*")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Velocity vs Altitude scatter
+            fig_scatter = go.Figure()
+            
+            # Normal points
+            normal_points = telemetry_df[~telemetry_df['is_anomaly']]
+            fig_scatter.add_trace(go.Scatter(
+                x=normal_points['velocity_km_s'],
+                y=normal_points['altitude_km'],
+                mode='markers',
+                name='Nominal',
+                marker=dict(
+                    color=normal_points['anomaly_score'],
+                    colorscale='Viridis',
+                    size=8,
+                    colorbar=dict(title='Anomaly<br>Score')
+                ),
+                hovertemplate='<b>Velocity:</b> %{x:.2f} km/s<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+            ))
+            
+            # Anomaly points
+            if len(anomaly_points) > 0:
+                fig_scatter.add_trace(go.Scatter(
+                    x=anomaly_points['velocity_km_s'],
+                    y=anomaly_points['altitude_km'],
+                    mode='markers',
+                    name='Anomaly',
+                    marker=dict(color='#ff0000', size=12, symbol='x'),
+                    hovertemplate='<b>⚠️ ANOMALY</b><br>Velocity: %{x:.2f} km/s<br>Altitude: %{y:,.0f} km<extra></extra>'
+                ))
+            
+            fig_scatter.update_layout(
+                title='Feature Space Analysis',
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#ffffff', family='Rajdhani'),
+                xaxis=dict(title='Velocity (km/s)', gridcolor='rgba(255,255,255,0.1)'),
+                yaxis=dict(title='Altitude (km)', gridcolor='rgba(255,255,255,0.1)'),
+                height=400
+            )
+            
+            st.plotly_chart(fig_scatter, use_container_width=True, key=f"scatter_{datetime.now().timestamp()}")
+        
+        with col2:
+            # Anomaly score gauge
+            current_anomaly_score = telemetry_df.iloc[-1]['anomaly_score']
+            
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=current_anomaly_score * 100,
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Current Anomaly Score", 'font': {'size': 20, 'color': '#ffffff'}},
+                delta={'reference': 30, 'increasing': {'color': '#ff0000'}, 'decreasing': {'color': '#00ff00'}},
+                gauge={
+                    'axis': {'range': [0, 100], 'tickcolor': '#ffffff'},
+                    'bar': {'color': '#00d4ff'},
+                    'bgcolor': 'rgba(0,0,0,0.3)',
+                    'borderwidth': 2,
+                    'bordercolor': '#ffffff',
+                    'steps': [
+                        {'range': [0, 30], 'color': 'rgba(0,255,0,0.2)'},
+                        {'range': [30, 70], 'color': 'rgba(255,215,0,0.2)'},
+                        {'range': [70, 100], 'color': 'rgba(255,0,0,0.2)'}
+                    ],
+                    'threshold': {
+                        'line': {'color': 'red', 'width': 4},
+                        'thickness': 0.75,
+                        'value': 70
+                    }
                 }
-            }
-        ))
-        
-        fig_gauge.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font={'color': '#ffffff', 'family': 'Rajdhani'},
-            height=400
-        )
-        
-        st.plotly_chart(fig_gauge, use_container_width=True)
+            ))
+            
+            fig_gauge.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font={'color': '#ffffff', 'family': 'Rajdhani'},
+                height=400
+            )
+            
+            st.plotly_chart(fig_gauge, use_container_width=True, key=f"gauge_{datetime.now().timestamp()}")
+    
+    # Call the auto-refreshing fragment
+    live_telemetry_display()
 
 # ───────────────────────────────────────────────────────────────────────────
-# TAB 2: STRATEGIC SIMULATION (SANDBOX)
+# TAB 2: STRATEGIC SIMULATION (NO AUTO-REFRESH)
 # ───────────────────────────────────────────────────────────────────────────
 
 with tab2:
@@ -1062,21 +1058,3 @@ st.markdown("""
     </p>
 </div>
 """, unsafe_allow_html=True)
-
-# Auto-refresh for live updates
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔄 Real-Time Updates")
-
-# Manual refresh button
-if st.sidebar.button("🔄 Refresh Telemetry Now", type="primary"):
-    st.rerun()
-
-# Auto-refresh toggle
-auto_refresh = st.sidebar.checkbox("Enable Auto-Refresh (1s)", value=False)
-
-if auto_refresh:
-    st.sidebar.info("⏱️ Next refresh in 1 second")
-    time.sleep(1)
-    st.rerun()
-else:
-    st.sidebar.info("💡 Enable auto-refresh for live tracking")
