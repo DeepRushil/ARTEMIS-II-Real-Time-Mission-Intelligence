@@ -192,10 +192,12 @@ This project demonstrates proficiency in:
 ## 📧 Contact
 
 **Deep Rushil**
-- Portfolio: [Your Portfolio URL]
+- [LIVE URL](https://artemis2.streamlit.app/)
 -  [LinkedIn](https://www.linkedin.com/in/deeprushil/)
 
 ---
 
 *Developed as part of Personal project, Please educate if there is any error, I am still learning. Thank you*
 *April 2026, Bengaluru*
+*GODSPEED ARTEMIS II* 
+
