@@ -37,45 +37,47 @@ CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;600;700&family=Space+Mono:wght@400;700&display=swap');
 
-/* ── Animated Galaxy Background ── */
+/* ── Core: transparent so canvas at z-index:-1 shows through ── */
+html, body { background: #0d1128 !important; margin: 0; padding: 0; }
+
 .stApp {
-    background: transparent;
+    background: transparent !important;
     color: #ffffff;
     font-family: 'Rajdhani', sans-serif;
-    position: relative;
 }
+[data-testid="stAppViewContainer"] { background: transparent !important; }
+[data-testid="stMain"]             { background: transparent !important; }
+.main .block-container             { background: transparent !important; padding-top: 1rem; }
 
-/* Full-page canvas background injected via JS – see below */
-#galaxy-bg {
-    position: fixed;
-    top: 0; left: 0;
-    width: 100vw; height: 100vh;
-    z-index: 0;
-    pointer-events: none;
-}
-
-/* Make Streamlit root transparent so canvas shows */
-.stApp > div:first-child {
-    background: transparent !important;
-}
-[data-testid="stAppViewContainer"] {
-    background: transparent !important;
-}
 [data-testid="stHeader"] {
-    background: rgba(5,8,20,0.6) !important;
-    backdrop-filter: blur(12px);
+    background: rgba(5, 8, 20, 0.70) !important;
+    backdrop-filter: blur(14px);
 }
 
 /* ── Glassmorphism Sidebar ── */
 [data-testid="stSidebar"] {
-    background: rgba(10, 14, 35, 0.45) !important;
-    backdrop-filter: blur(24px) saturate(180%) !important;
-    -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
-    border-right: 1px solid rgba(0,212,255,0.2) !important;
-    box-shadow: 4px 0 30px rgba(0,0,0,0.5) !important;
+    background: rgba(8, 12, 30, 0.55) !important;
+    backdrop-filter: blur(28px) saturate(160%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
+    border-right: 1px solid rgba(0,212,255,0.18) !important;
+    box-shadow: 4px 0 40px rgba(0,0,0,0.6) !important;
 }
-[data-testid="stSidebar"] > div {
-    background: transparent !important;
+[data-testid="stSidebar"] > div { background: transparent !important; }
+
+/* ── All Streamlit containers must be transparent ── */
+[data-testid="stMain"]          { background: transparent !important; }
+.main .block-container          { background: transparent !important; padding-top: 1rem; }
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+.element-container, .stMarkdown { position: relative; z-index: 10; background: transparent !important; }
+
+/* ── Metric cards: subtle glass tint ── */
+[data-testid="stMetric"] {
+    background: rgba(0,212,255,0.05) !important;
+    border: 1px solid rgba(0,212,255,0.15) !important;
+    border-radius: 10px !important;
+    padding: 0.8rem !important;
+    backdrop-filter: blur(10px) !important;
 }
 
 /* ── Hide Streamlit chrome ── */
@@ -280,175 +282,195 @@ footer {visibility: hidden;}
     color: #00d4ff;
 }
 
-/* ── General z-index for main content ── */
-[data-testid="stVerticalBlock"] { position: relative; z-index: 10; }
+/* ── General z-index for main content (kept for compatibility) ── */
 </style>
 """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ANIMATED GALAXY + MOON BACKGROUND (Canvas)
+# ANIMATED GALAXY + MOON BACKGROUND
+# Injected via st.markdown (unsafe_allow_html) so the <script> runs
+# directly in the main Streamlit document — NOT inside a sandboxed iframe.
+# This is the only reliable way to attach a fixed canvas to the real DOM.
 # ═══════════════════════════════════════════════════════════════════════════
 
-GALAXY_BG_HTML = """
-<canvas id="galaxy-bg"></canvas>
+st.markdown("""
+<canvas id="artemis-galaxy-canvas" style="
+  position:fixed;top:0;left:0;
+  width:100vw;height:100vh;
+  z-index:-1;
+  pointer-events:none;
+  display:block;
+"></canvas>
+
 <script>
 (function(){
-  const canvas = document.getElementById('galaxy-bg');
-  const ctx = canvas.getContext('2d');
-  let W, H, stars=[], nebulae=[], moonAngle=0;
-  const NUM_STARS = 380;
+  // Wait for DOM then boot
+  function boot(){
+    const canvas = document.getElementById('artemis-galaxy-canvas');
+    if(!canvas){ setTimeout(boot, 50); return; }
+    const ctx = canvas.getContext('2d');
 
-  function resize(){ W=canvas.width=window.innerWidth; H=canvas.height=window.innerHeight; }
-  window.addEventListener('resize', resize);
-  resize();
+    let W, H, stars=[], nebulae=[], t=0;
+    const NUM_STARS = 360;
 
-  // ── Stars ──
-  for(let i=0;i<NUM_STARS;i++){
-    stars.push({
-      x: Math.random()*W, y: Math.random()*H,
-      r: Math.random()*1.6+0.2,
-      a: Math.random(),
-      speed: Math.random()*0.004+0.001,
-      twinkle: Math.random()*Math.PI*2
-    });
-  }
+    function resize(){
+      W = canvas.width  = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
 
-  // ── Nebula clusters ──
-  const nebulaColors = [
-    [0,180,255], [120,60,200], [255,80,120], [0,220,180]
-  ];
-  for(let i=0;i<6;i++){
-    nebulae.push({
-      x: Math.random()*W, y: Math.random()*H,
-      r: 180+Math.random()*220,
-      color: nebulaColors[i%nebulaColors.length],
-      alpha: 0.025+Math.random()*0.04
-    });
-  }
-
-  // ── Moon ──
-  const moon = {
-    x: W*0.82, y: H*0.18, r: 72,
-    craters: Array.from({length:9}, ()=>({
-      ox: (Math.random()-0.5)*100,
-      oy: (Math.random()-0.5)*100,
-      r:  4+Math.random()*18
-    }))
-  };
-
-  let t=0;
-  function draw(){
-    t += 0.008;
-    moonAngle = t*0.015;
-    // resize guard
-    if(W!==window.innerWidth||H!==window.innerHeight) resize();
-
-    // Deep space gradient
-    const bg = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*0.75);
-    bg.addColorStop(0, '#0c1024');
-    bg.addColorStop(0.5,'#070b1a');
-    bg.addColorStop(1,  '#020408');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0,0,W,H);
-
-    // Nebulae
-    nebulae.forEach(n=>{
-      const ng = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
-      ng.addColorStop(0,  `rgba(${n.color[0]},${n.color[1]},${n.color[2]},${n.alpha})`);
-      ng.addColorStop(0.5,`rgba(${n.color[0]},${n.color[1]},${n.color[2]},${n.alpha*0.4})`);
-      ng.addColorStop(1,  `rgba(0,0,0,0)`);
-      ctx.fillStyle = ng;
-      ctx.beginPath();
-      ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
-      ctx.fill();
-    });
-
-    // Stars with twinkle
-    stars.forEach(s=>{
-      s.twinkle += s.speed;
-      const alpha = 0.4 + 0.6*Math.abs(Math.sin(s.twinkle));
-      ctx.beginPath();
-      ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
-      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-      ctx.fill();
-      // Occasional bright star spike
-      if(s.r>1.2){
-        ctx.strokeStyle=`rgba(255,255,255,${alpha*0.3})`;
-        ctx.lineWidth=0.5;
-        ctx.beginPath();
-        ctx.moveTo(s.x-s.r*3,s.y); ctx.lineTo(s.x+s.r*3,s.y);
-        ctx.moveTo(s.x,s.y-s.r*3); ctx.lineTo(s.x,s.y+s.r*3);
-        ctx.stroke();
-      }
-    });
-
-    // ── Moon ──
-    const mx = W*0.82 + Math.sin(moonAngle)*8;
-    const my = H*0.18 + Math.cos(moonAngle*0.7)*5;
-    const mr = 72;
-
-    // Glow halo
-    const glow = ctx.createRadialGradient(mx,my,mr*0.8,mx,my,mr*2.8);
-    glow.addColorStop(0,  'rgba(200,220,255,0.12)');
-    glow.addColorStop(0.5,'rgba(120,170,255,0.05)');
-    glow.addColorStop(1,  'rgba(0,0,0,0)');
-    ctx.fillStyle=glow;
-    ctx.beginPath(); ctx.arc(mx,my,mr*2.8,0,Math.PI*2); ctx.fill();
-
-    // Moon body
-    const moonGrad = ctx.createRadialGradient(mx-mr*0.25,my-mr*0.25,mr*0.1,mx,my,mr);
-    moonGrad.addColorStop(0,'#e8eaf0');
-    moonGrad.addColorStop(0.6,'#c5c9d8');
-    moonGrad.addColorStop(1,'#8a8fa8');
-    ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2);
-    ctx.fillStyle=moonGrad; ctx.fill();
-
-    // Moon craters
-    moon.craters.forEach(c=>{
-      const cx2=mx+c.ox, cy2=my+c.oy;
-      if(Math.sqrt(c.ox*c.ox+c.oy*c.oy)+c.r>mr) return;
-      const cg=ctx.createRadialGradient(cx2,cy2,0,cx2,cy2,c.r);
-      cg.addColorStop(0,'rgba(80,85,105,0.55)');
-      cg.addColorStop(1,'rgba(100,105,125,0)');
-      ctx.beginPath(); ctx.arc(cx2,cy2,c.r,0,Math.PI*2);
-      ctx.fillStyle=cg; ctx.fill();
-    });
-
-    // Terminator shadow
-    ctx.save();
-    ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2);
-    ctx.clip();
-    const shadowX = mx+mr*0.35;
-    const termGrad = ctx.createRadialGradient(shadowX,my,0,shadowX,my,mr*1.1);
-    termGrad.addColorStop(0,'rgba(5,8,20,0)');
-    termGrad.addColorStop(0.4,'rgba(5,8,20,0.35)');
-    termGrad.addColorStop(1,'rgba(5,8,20,0.78)');
-    ctx.fillStyle=termGrad; ctx.fillRect(mx-mr,my-mr,mr*2,mr*2);
-    ctx.restore();
-
-    // Shooting star occasionally
-    if(Math.random()<0.004){
-      const sx=Math.random()*W*0.6, sy=Math.random()*H*0.4;
-      const len=80+Math.random()*120;
-      const sg=ctx.createLinearGradient(sx,sy,sx+len,sy+len*0.4);
-      sg.addColorStop(0,'rgba(255,255,255,0)');
-      sg.addColorStop(0.5,'rgba(255,255,255,0.9)');
-      sg.addColorStop(1,'rgba(255,255,255,0)');
-      ctx.strokeStyle=sg; ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(sx+len,sy+len*0.4);
-      ctx.stroke();
+    // Stars
+    for(let i=0;i<NUM_STARS;i++){
+      stars.push({
+        x: Math.random()*W, y: Math.random()*H,
+        r: Math.random()*1.6+0.2,
+        speed: Math.random()*0.004+0.001,
+        twinkle: Math.random()*Math.PI*2
+      });
     }
 
-    requestAnimationFrame(draw);
+    // Nebulae
+    const NC = [[0,180,255],[120,60,200],[255,80,120],[0,220,180],[80,0,200],[0,160,220]];
+    for(let i=0;i<6;i++){
+      nebulae.push({
+        x: Math.random()*W, y: Math.random()*H,
+        r: 180+Math.random()*240,
+        c: NC[i], a: 0.025+Math.random()*0.04
+      });
+    }
+
+    // Moon craters (fixed relative offsets)
+    const craters = [
+      {ox:-18,oy:-22,r:9},{ox:14,oy:-8,r:6},{ox:-5,oy:18,r:11},
+      {ox:24,oy:12,r:5},{ox:-28,oy:8,r:7},{ox:8,oy:-28,r:8},
+      {ox:-12,oy:28,r:5},{ox:26,oy:-20,r:6},{ox:-22,oy:-5,r:4}
+    ];
+
+    // Shooting star pool
+    let shooters=[];
+    function spawnShooter(){
+      shooters.push({
+        x:Math.random()*W*0.7, y:Math.random()*H*0.45,
+        len:90+Math.random()*130, life:1.0,
+        dx:1, dy:0.38
+      });
+    }
+
+    function draw(){
+      t += 0.008;
+      if(W!==window.innerWidth||H!==window.innerHeight) resize();
+
+      // ── Deep space base ──
+      const bg = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*0.8);
+      bg.addColorStop(0,'#0d1128');
+      bg.addColorStop(0.5,'#070b1a');
+      bg.addColorStop(1,'#020408');
+      ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+      // ── Nebulae ──
+      nebulae.forEach(n=>{
+        const ng=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
+        ng.addColorStop(0,`rgba(${n.c[0]},${n.c[1]},${n.c[2]},${n.a})`);
+        ng.addColorStop(0.55,`rgba(${n.c[0]},${n.c[1]},${n.c[2]},${n.a*0.35})`);
+        ng.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=ng;
+        ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2); ctx.fill();
+      });
+
+      // ── Stars ──
+      stars.forEach(s=>{
+        s.twinkle+=s.speed;
+        const al=0.35+0.65*Math.abs(Math.sin(s.twinkle));
+        ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+        ctx.fillStyle=`rgba(255,255,255,${al})`; ctx.fill();
+        if(s.r>1.15){
+          ctx.strokeStyle=`rgba(255,255,255,${al*0.28})`;
+          ctx.lineWidth=0.5;
+          ctx.beginPath();
+          ctx.moveTo(s.x-s.r*3,s.y); ctx.lineTo(s.x+s.r*3,s.y);
+          ctx.moveTo(s.x,s.y-s.r*3); ctx.lineTo(s.x,s.y+s.r*3);
+          ctx.stroke();
+        }
+      });
+
+      // ── Moon ──
+      const moonAngle = t*0.014;
+      const mx = W*0.83+Math.sin(moonAngle)*7;
+      const my = H*0.17+Math.cos(moonAngle*0.65)*5;
+      const mr = Math.min(W,H)*0.075;  // responsive radius
+
+      // Outer atmospheric glow
+      const atm=ctx.createRadialGradient(mx,my,mr*0.7,mx,my,mr*3.2);
+      atm.addColorStop(0,'rgba(180,210,255,0.10)');
+      atm.addColorStop(0.4,'rgba(100,160,255,0.04)');
+      atm.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=atm;
+      ctx.beginPath(); ctx.arc(mx,my,mr*3.2,0,Math.PI*2); ctx.fill();
+
+      // Moon surface
+      const surf=ctx.createRadialGradient(mx-mr*0.28,my-mr*0.28,mr*0.05,mx,my,mr);
+      surf.addColorStop(0,'#eceef6');
+      surf.addColorStop(0.55,'#c8ccdb');
+      surf.addColorStop(1,'#898ea8');
+      ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2);
+      ctx.fillStyle=surf; ctx.fill();
+
+      // Craters
+      craters.forEach(c=>{
+        const cr=c.r*(mr/72);
+        const cx2=mx+c.ox*(mr/72), cy2=my+c.oy*(mr/72);
+        if(Math.sqrt((cx2-mx)**2+(cy2-my)**2)+cr>mr*0.96) return;
+        const cg=ctx.createRadialGradient(cx2,cy2,0,cx2,cy2,cr);
+        cg.addColorStop(0,'rgba(70,75,100,0.6)');
+        cg.addColorStop(1,'rgba(100,108,130,0)');
+        ctx.beginPath(); ctx.arc(cx2,cy2,cr,0,Math.PI*2);
+        ctx.fillStyle=cg; ctx.fill();
+      });
+
+      // Terminator shadow (night side)
+      ctx.save();
+      ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2); ctx.clip();
+      const shx=mx+mr*0.38;
+      const sh=ctx.createRadialGradient(shx,my,0,shx,my,mr*1.15);
+      sh.addColorStop(0,'rgba(4,6,18,0)');
+      sh.addColorStop(0.38,'rgba(4,6,18,0.38)');
+      sh.addColorStop(1,'rgba(4,6,18,0.82)');
+      ctx.fillStyle=sh; ctx.fillRect(mx-mr,my-mr,mr*2,mr*2);
+      ctx.restore();
+
+      // ── Shooting stars ──
+      if(Math.random()<0.003) spawnShooter();
+      shooters=shooters.filter(s=>{
+        s.life-=0.025;
+        if(s.life<=0) return false;
+        const sg=ctx.createLinearGradient(s.x,s.y,s.x+s.len*s.dx,s.y+s.len*s.dy);
+        sg.addColorStop(0,'rgba(255,255,255,0)');
+        sg.addColorStop(0.5,`rgba(255,255,255,${s.life*0.9})`);
+        sg.addColorStop(1,'rgba(255,255,255,0)');
+        ctx.strokeStyle=sg; ctx.lineWidth=1.4;
+        ctx.beginPath();
+        ctx.moveTo(s.x,s.y);
+        ctx.lineTo(s.x+s.len*s.dx,s.y+s.len*s.dy);
+        ctx.stroke();
+        return true;
+      });
+
+      requestAnimationFrame(draw);
+    }
+    draw();
   }
-  draw();
+
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
 </script>
-"""
-
-components.html(GALAXY_BG_HTML, height=0)
+""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONSTANTS
