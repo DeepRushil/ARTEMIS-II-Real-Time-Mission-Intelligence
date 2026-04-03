@@ -567,7 +567,7 @@ def display_live_met_timer():
     """Display JavaScript-based MET timer using Streamlit components for reliable execution"""
     launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
     
-    html_code = """
+    html_code = '''
     <!DOCTYPE html>
     <html>
     <head>
