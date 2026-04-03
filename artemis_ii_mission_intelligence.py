@@ -481,180 +481,327 @@ CREW_DATA = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# NASA HORIZONS API — Real telemetry with simulation fallback
+# DATA SOURCE STRATEGY — 3-Tier with honest labelling
+#
+# Tier 1 — AROW state vectors (nasa.gov/trackartemis)
+#   TRUE live sensor data from Orion → Mission Control → public download.
+#   NASA does NOT expose a REST/JSON streaming API for AROW; it publishes
+#   state-vector files and an ephemeris file during the mission.
+#   We attempt to fetch the AROW ephemeris/state-vector endpoint directly.
+#   If the file is available (mission is active & NASA has published it),
+#   we parse it and use it.  This is the most accurate possible source.
+#
+# Tier 2 — JPL Horizons API  (ssd.jpl.nasa.gov/api/horizons.api)
+#   Horizons tracks Artemis II as object -1024 ("Artemis II (spacecraft)
+#   (Integrity)").  It receives periodic trajectory updates from Mission
+#   Control and propagates them forward.  Accuracy is excellent but it
+#   can lag true position by minutes to a few hours between uplink cycles.
+#   This is what independent trackers (artemislive.org, etc.) use.
+#
+# Tier 3 — Physics simulation
+#   Keplerian / mission-profile model.  Always available as last resort.
+#   Labelled clearly so the user is never misled.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Orion NAIF ID for Artemis missions (Orion spacecraft SPICE target)
-# Horizons uses "Orion" or target body code; we'll use the Horizons web API
-HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
+HORIZONS_URL  = "https://ssd.jpl.nasa.gov/api/horizons.api"
+AROW_BASE_URL = "https://nasa.gov/trackartemis"   # human-facing; file URLs vary
 
+# ── Source metadata used in UI badges ──────────────────────────────────────
+SOURCE_META = {
+    "AROW":       {"label": "🛰️ NASA AROW",        "color": "#00ff88",
+                   "detail": "Live Orion sensor telemetry via NASA Mission Control"},
+    "Horizons":   {"label": "🔭 JPL Horizons",      "color": "#00d4ff",
+                   "detail": "Ephemeris from NASA/JPL (periodic MCC uplinks, slight lag possible)"},
+    "simulation": {"label": "⚙️ Physics Model",     "color": "#ffd700",
+                   "detail": "Keplerian simulation — AROW & Horizons unreachable"},
+}
+
+
+# ── Tier 1: AROW state-vector file ─────────────────────────────────────────
+def fetch_arow_state_vector():
+    """
+    Attempt to download the AROW live state-vector or ephemeris file.
+
+    During an active mission NASA publishes a plain-text state-vector file
+    and an SPK/ephemeris at nasa.gov/trackartemis.  The exact filename
+    changes per mission; we try the known Artemis II paths.  If the file
+    is not yet posted (pre-TLI) or the server is unreachable we return None.
+
+    Returns dict with telemetry fields, or None.
+    """
+    # Known candidate URLs (NASA posts these during active mission phases)
+    candidate_urls = [
+        "https://nasa.gov/sites/default/files/atoms/files/artemis2_state_vectors.txt",
+        "https://www.nasa.gov/sites/default/files/atoms/files/artemis_ii_ephemeris.txt",
+        "https://artemis.nasa.gov/artemis-ii/state-vectors/latest.txt",
+    ]
+
+    for url in candidate_urls:
+        try:
+            resp = requests.get(url, timeout=5, headers={"User-Agent": "ArtemisII-Dashboard/1.0"})
+            if resp.status_code != 200:
+                continue
+
+            text = resp.text.strip()
+            # State-vector format: lines with  EPOCH  X  Y  Z  VX  VY  VZ
+            # Skip comment/header lines (start with # or letters)
+            data_lines = [l for l in text.splitlines()
+                          if l.strip() and not l.strip().startswith("#")]
+            if not data_lines:
+                continue
+
+            # Take the last (most recent) data line
+            parts = data_lines[-1].split()
+            if len(parts) < 7:
+                continue
+
+            # parts: [epoch_jd_or_iso, x, y, z, vx, vy, vz]
+            x_km = float(parts[1]);  y_km = float(parts[2]);  z_km = float(parts[3])
+            vx   = float(parts[4]);  vy   = float(parts[5]);  vz   = float(parts[6])
+
+            dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
+            velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
+            dist_moon  = _approx_moon_distance(x_km, y_km)
+
+            return {
+                "distance_earth_km": dist_earth,
+                "distance_moon_km":  dist_moon,
+                "velocity_km_s":     velocity,
+                "altitude_km":       dist_earth - 6371,
+                "x_km": x_km, "y_km": y_km, "z_km": z_km,
+                "source": "AROW",
+                "source_url": url,
+            }
+
+        except Exception:
+            continue
+
+    return None   # None of the AROW endpoints were reachable / published yet
+
+
+# ── Tier 2: JPL Horizons ────────────────────────────────────────────────────
 def fetch_horizons_telemetry():
     """
-    Query NASA JPL Horizons for real Orion/Artemis II position data.
+    Query JPL Horizons for Artemis II (object -1024).
+
+    -1024 is the official NAIF/SPICE ID for the Artemis II Orion spacecraft
+    (callsign "Integrity").  Horizons receives trajectory uplinks from MCC
+    periodically and propagates the orbit forward — accurate but not truly
+    instantaneous like AROW sensor data.
+
     Returns dict or None on failure.
     """
     try:
-        now_utc = datetime.utcnow()
-        stop_utc = now_utc + timedelta(minutes=1)
-        fmt = "%Y-%m-%d %H:%M"
+        now_utc  = datetime.utcnow()
+        stop_utc = now_utc + timedelta(minutes=2)
+        fmt      = "%Y-%m-%d %H:%M"
 
         params = {
-            "format": "json",
-            "COMMAND": "'Orion'",          # Artemis II Orion spacecraft
-            "OBJ_DATA": "NO",
-            "MAKE_EPHEM": "YES",
-            "EPHEM_TYPE": "VECTORS",
-            "CENTER": "'500@399'",          # Geocentric (Earth center)
-            "START_TIME": f"'{now_utc.strftime(fmt)}'",
-            "STOP_TIME":  f"'{stop_utc.strftime(fmt)}'",
-            "STEP_SIZE":  "'1 m'",
-            "VEC_TABLE":  "3",              # position + velocity
-            "REF_PLANE":  "ECLIPTIC",
-            "REF_SYSTEM": "J2000",
-            "OUT_UNITS":  "KM-S",
-            "CSV_FORMAT": "NO",
+            "format":      "json",
+            "COMMAND":     "'-1024'",         # Artemis II (spacecraft) (Integrity)
+            "OBJ_DATA":    "NO",
+            "MAKE_EPHEM":  "YES",
+            "EPHEM_TYPE":  "VECTORS",
+            "CENTER":      "'500@399'",        # Geocentric (Earth centre)
+            "START_TIME":  f"'{now_utc.strftime(fmt)}'",
+            "STOP_TIME":   f"'{stop_utc.strftime(fmt)}'",
+            "STEP_SIZE":   "'1 m'",
+            "VEC_TABLE":   "3",               # X Y Z  VX VY VZ
+            "REF_PLANE":   "FRAME",
+            "REF_SYSTEM":  "J2000",
+            "OUT_UNITS":   "KM-S",
+            "CSV_FORMAT":  "NO",
         }
 
-        resp = requests.get(HORIZONS_URL, params=params, timeout=6)
+        resp = requests.get(HORIZONS_URL, params=params, timeout=8)
         if resp.status_code != 200:
             return None
 
-        data = resp.json()
-        result_text = data.get("result", "")
-
-        # Parse $$SOE … $$EOE block
+        result_text = resp.json().get("result", "")
         if "$$SOE" not in result_text:
             return None
 
-        soe_idx = result_text.index("$$SOE") + 5
-        eoe_idx = result_text.index("$$EOE")
-        block = result_text[soe_idx:eoe_idx].strip()
+        soe  = result_text.index("$$SOE") + 5
+        eoe  = result_text.index("$$EOE")
+        block = result_text[soe:eoe].strip()
         lines = [l.strip() for l in block.splitlines() if l.strip()]
 
-        # Horizons vector table: line 1 = time, line 2 = X Y Z, line 3 = VX VY VZ
+        # Horizons VECTORS output layout (non-CSV):
+        #   line 0: JDTDB  ...  date/time string
+        #   line 1: X= ... Y= ... Z= ...
+        #   line 2: VX= ... VY= ... VZ= ...
+        # Values follow the = sign
         if len(lines) < 3:
             return None
 
-        pos_vals = lines[1].split()
-        vel_vals = lines[2].split()
+        def _extract(line):
+            """Pull floats after = signs in a Horizons vector line."""
+            vals = []
+            for token in line.split():
+                if "=" in token:
+                    try:
+                        vals.append(float(token.split("=")[1]))
+                    except ValueError:
+                        pass
+            # Fallback: grab all floats if no = found
+            if not vals:
+                for token in line.split():
+                    try:
+                        vals.append(float(token))
+                    except ValueError:
+                        pass
+            return vals
 
-        x_km = float(pos_vals[0])
-        y_km = float(pos_vals[1])
-        z_km = float(pos_vals[2])
-        vx   = float(vel_vals[0])
-        vy   = float(vel_vals[1])
-        vz   = float(vel_vals[2])
+        pos = _extract(lines[1])
+        vel = _extract(lines[2])
 
-        distance_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
-        velocity       = np.sqrt(vx**2 + vy**2 + vz**2)
+        if len(pos) < 3 or len(vel) < 3:
+            return None
 
-        # Moon distance (approximate — Moon ~ 384400 km from Earth; use geometry)
-        # For simplicity, distance_moon ≈ |moon_pos - craft_pos|
-        # Moon pos approximation via angle
-        elapsed_days = (now_utc - MISSION_LAUNCH_UTC).total_seconds() / 86400
-        moon_angle_rad = elapsed_days * (2 * np.pi / 27.3)  # synodic period
-        moon_x = 384400 * np.cos(moon_angle_rad)
-        moon_y = 384400 * np.sin(moon_angle_rad)
-        distance_moon = np.sqrt((x_km - moon_x)**2 + (y_km - moon_y)**2)
+        x_km, y_km, z_km = pos[0], pos[1], pos[2]
+        vx,   vy,   vz   = vel[0], vel[1], vel[2]
+
+        dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
+        velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
+        dist_moon  = _approx_moon_distance(x_km, y_km)
 
         return {
-            "distance_earth_km": distance_earth,
-            "distance_moon_km":  distance_moon,
+            "distance_earth_km": dist_earth,
+            "distance_moon_km":  dist_moon,
             "velocity_km_s":     velocity,
-            "altitude_km":       distance_earth - 6371,
+            "altitude_km":       dist_earth - 6371,
             "x_km": x_km, "y_km": y_km, "z_km": z_km,
-            "source": "NASA_Horizons",
+            "source": "Horizons",
+            "source_url": HORIZONS_URL,
         }
 
     except Exception:
         return None
 
 
+# ── Tier 3: Physics simulation ──────────────────────────────────────────────
 def calculate_mission_profile_sim():
-    """Physics-based fallback simulation."""
+    """
+    Keplerian / mission-profile fallback.
+    Based on the publicly known Artemis II free-return trajectory.
+    """
     now = datetime.utcnow()
     elapsed_hours = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
 
     if elapsed_hours < 24:
         perigee, apogee = 300, 70000
-        a = (perigee + apogee) / 2 + 6371
-        r = perigee + 6371 + (apogee - perigee) * abs(np.sin(elapsed_hours / 24 * np.pi))
-        velocity = np.sqrt(398600 * (2 / r - 1 / a))
-        altitude = r - 6371
+        a_orb = (perigee + apogee) / 2 + 6371
+        r     = perigee + 6371 + (apogee - perigee) * abs(np.sin(elapsed_hours / 24 * np.pi))
+        velocity      = np.sqrt(398600 * (2 / r - 1 / a_orb))
+        altitude      = r - 6371
         distance_earth = altitude
         distance_moon  = 384400 - altitude
-        if 1.9 < elapsed_hours < 2.1:
+        if 1.9 < elapsed_hours < 2.1:        # ICPS separation transient
             altitude  += np.random.normal(0, 80)
             velocity  += np.random.normal(0, 0.25)
     elif elapsed_hours < 96:
-        progress = (elapsed_hours - 24) / 72
+        progress       = (elapsed_hours - 24) / 72
         distance_earth = 70000 + progress * (384400 - 70000)
         distance_moon  = 384400 - distance_earth
-        altitude = distance_earth
-        velocity = 10.0 - progress * 9.0
-        if 23.8 < elapsed_hours < 24.3:
+        altitude       = distance_earth
+        velocity       = 10.0 - progress * 9.0
+        if 23.8 < elapsed_hours < 24.3:      # TLI burn variance
             velocity += np.random.normal(0, 0.35)
     elif elapsed_hours < 120:
         distance_earth = 384400 + 10000
         distance_moon  = 300
-        altitude = distance_earth
-        velocity = 2.0
+        altitude       = distance_earth
+        velocity       = 2.0
     else:
-        progress = min(1.0, (elapsed_hours - 120) / 120)
+        progress       = min(1.0, (elapsed_hours - 120) / 120)
         distance_earth = 400000 - progress * 399700
         distance_moon  = abs(384400 - distance_earth)
-        altitude = distance_earth
-        velocity = 1.0 + progress * 10.0
+        altitude       = distance_earth
+        velocity       = 1.0 + progress * 10.0
 
     return {
         "distance_earth_km": float(distance_earth),
         "distance_moon_km":  float(distance_moon),
         "velocity_km_s":     float(velocity),
         "altitude_km":       float(altitude),
+        "x_km": float(altitude), "y_km": 0.0, "z_km": 0.0,
         "source": "simulation",
+        "source_url": None,
     }
 
 
+# ── Shared helper ────────────────────────────────────────────────────────────
+def _approx_moon_distance(craft_x_km, craft_y_km):
+    """
+    Approximate distance from craft to Moon.
+    Moon position estimated via simple circular orbit (27.3-day period)
+    referenced from mission launch epoch.
+    """
+    now = datetime.utcnow()
+    elapsed_days   = (now - MISSION_LAUNCH_UTC).total_seconds() / 86400
+    moon_angle_rad = elapsed_days * (2 * np.pi / 27.3)
+    moon_x = 384400 * np.cos(moon_angle_rad)
+    moon_y = 384400 * np.sin(moon_angle_rad)
+    return float(np.sqrt((craft_x_km - moon_x)**2 + (craft_y_km - moon_y)**2))
+
+
+# ── Main telemetry orchestrator ──────────────────────────────────────────────
 def get_live_telemetry():
     """
-    Attempt NASA Horizons first; fall back to simulation.
-    Stores history in session_state for anomaly detection.
+    Try AROW → Horizons → simulation (in that order).
+    Caches 5-second minimum between fetches to avoid hammering APIs.
+    Stores rolling history in session_state for ML anomaly detection.
     """
     if "telemetry_history" not in st.session_state:
-        st.session_state.telemetry_history = []
-        st.session_state.last_telemetry_update = None
-        st.session_state.data_source = "simulation"
+        st.session_state.telemetry_history       = []
+        st.session_state.last_telemetry_update   = None
+        st.session_state.data_source             = "simulation"
+        st.session_state.horizons_consecutive_ok = 0
+        st.session_state.arow_available          = False
 
-    now = datetime.utcnow()
+    now        = datetime.utcnow()
     should_add = (
         st.session_state.last_telemetry_update is None or
         (now - st.session_state.last_telemetry_update).total_seconds() >= 5
     )
 
     if should_add:
-        live = fetch_horizons_telemetry()
-        if live:
-            current = live
-            st.session_state.data_source = "NASA_Horizons"
-        else:
+        # Tier 1 — AROW (true live telemetry)
+        current = fetch_arow_state_vector()
+        if current:
+            st.session_state.data_source    = "AROW"
+            st.session_state.arow_available = True
+
+        # Tier 2 — JPL Horizons (periodic ephemeris updates)
+        if not current:
+            current = fetch_horizons_telemetry()
+            if current:
+                st.session_state.data_source             = "Horizons"
+                st.session_state.horizons_consecutive_ok += 1
+            else:
+                st.session_state.horizons_consecutive_ok = 0
+
+        # Tier 3 — Physics simulation
+        if not current:
             current = calculate_mission_profile_sim()
+            # Add small realistic noise so the chart isn't perfectly smooth
             current["altitude_km"]   += np.random.normal(0, 10)
             current["velocity_km_s"] += np.random.normal(0, 0.04)
             st.session_state.data_source = "simulation"
 
-        st.session_state.current_telemetry = current
+        st.session_state.current_telemetry    = current
         elapsed_hours = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
 
         st.session_state.telemetry_history.append({
-            "timestamp":    now,
-            "altitude_km":  current["altitude_km"],
-            "velocity_km_s":current["velocity_km_s"],
-            "met_hours":    elapsed_hours,
-            "source":       current["source"],
+            "timestamp":     now,
+            "altitude_km":   current["altitude_km"],
+            "velocity_km_s": current["velocity_km_s"],
+            "met_hours":     elapsed_hours,
+            "source":        current["source"],
         })
         st.session_state.last_telemetry_update = now
 
-    # Memory cap
+    # Rolling window — keep last 120 points (~10 min at 5 s cadence)
     if len(st.session_state.telemetry_history) > 120:
         st.session_state.telemetry_history = st.session_state.telemetry_history[-120:]
 
@@ -836,8 +983,8 @@ def display_mission_success():
     model.update(completed, penalty)
     prob = model.predict()
     lo, hi = model.credible_interval()
-    src = st.session_state.get("data_source", "simulation")
-    src_label = "🛰️ NASA Horizons API" if src == "NASA_Horizons" else "⚙️ Physics Simulation"
+    src      = st.session_state.get("data_source", "simulation")
+    sm       = SOURCE_META.get(src, SOURCE_META["simulation"])
     penalty_txt = f" · Anomaly Penalty: {penalty}" if penalty else ""
 
     st.markdown(f"""
@@ -847,7 +994,7 @@ def display_mission_success():
       <div class="hero-sub">
         Bayesian Beta-Binomial · 95% CI: [{lo*100:.1f}%, {hi*100:.1f}%]<br>
         <span style="color:#00d4ff;">Milestones: {completed}/{len(ms)} complete</span>{penalty_txt}<br>
-        <span style="color:#ffd700;">Data: {src_label}</span>
+        <span style="color:{sm['color']};">{sm['label']} · {sm['detail']}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -874,18 +1021,28 @@ with st.sidebar:
     st.markdown("### ⏱️ MISSION ELAPSED TIME")
     display_live_met_timer()
 
-    # Update rate info
-    st.markdown("""
-    <div class="glass-card" style="margin-top:.5rem;">
-      <div style="font-size:.68rem;color:rgba(255,255,255,0.6);font-family:'Space Mono',monospace;line-height:1.8;">
-        🔄 <b>Update Rates</b><br>
-        · MET Timer: 1 s (real-time)<br>
-        · Telemetry:  5 s<br>
-        · Milestones: 5 s<br>
-        · Prediction: 5 s
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Data source explainer + update rates
+    @st.fragment(run_every="5s")
+    def sidebar_source_badge():
+        src = st.session_state.get("data_source", "simulation")
+        sm  = SOURCE_META.get(src, SOURCE_META["simulation"])
+        arow_ok = st.session_state.get("arow_available", False)
+        hz_ok   = st.session_state.get("horizons_consecutive_ok", 0) > 0
+        def dot(ok): return f"<span style='color:{'#00ff88' if ok else '#ff4444'};'>●</span>"
+        st.markdown(f"""
+        <div class="glass-card" style="margin-top:.5rem;">
+          <div style="font-size:.68rem;color:rgba(255,255,255,0.6);font-family:'Space Mono',monospace;line-height:2;">
+            <b style="color:{sm['color']};">Active: {sm['label']}</b><br>
+            {dot(arow_ok)} Tier 1 · NASA AROW<br>
+            {dot(hz_ok)}   Tier 2 · JPL Horizons (-1024)<br>
+            {dot(not arow_ok and not hz_ok)} Tier 3 · Physics Model<br>
+            <hr style="border-color:rgba(255,255,255,0.1);margin:.4rem 0;">
+            🔄 MET: 1 s · Telemetry: 5 s<br>
+            🔄 Milestones: 5 s · Prediction: 5 s
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    sidebar_source_badge()
 
     @st.fragment(run_every="5s")
     def sidebar_phase():
@@ -936,10 +1093,33 @@ with tab1:
     @st.fragment(run_every="5s")
     def live_telemetry_display():
         tdf = get_live_telemetry()
-        src = st.session_state.get("data_source", "simulation")
+        src    = st.session_state.get("data_source", "simulation")
+        sm     = SOURCE_META.get(src, SOURCE_META["simulation"])
         utc_str = datetime.utcnow().strftime("%H:%M:%S UTC")
-        src_txt = "🛰️ **NASA Horizons API** (live)" if src == "NASA_Horizons" else "⚙️ **Physics Simulation** (NASA API unavailable)"
-        st.info(f"{src_txt} · Last update: {utc_str} · Refresh: 5 s")
+
+        # Data source banner with tiered explanation
+        tier_num = {"AROW": 1, "Horizons": 2, "simulation": 3}.get(src, 3)
+        tier_desc = {
+            "AROW":       "Tier 1 · Live Orion sensor data via NASA Mission Control / AROW",
+            "Horizons":   "Tier 2 · JPL Horizons ephemeris (obj -1024 · periodic MCC uplinks)",
+            "simulation": "Tier 3 · Physics simulation — AROW & Horizons currently unreachable",
+        }.get(src, "Tier 3 · Physics simulation")
+
+        st.markdown(f"""
+        <div style="background:rgba(0,0,0,0.3);border:1px solid {sm['color']};border-radius:10px;
+                    padding:.7rem 1.2rem;margin-bottom:1rem;backdrop-filter:blur(8px);
+                    display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+          <span style="color:{sm['color']};font-family:'Space Mono',monospace;font-size:.85rem;font-weight:700;">
+            {sm['label']}
+          </span>
+          <span style="color:rgba(255,255,255,0.55);font-family:'Space Mono',monospace;font-size:.75rem;">
+            {tier_desc}
+          </span>
+          <span style="margin-left:auto;color:rgba(255,255,255,0.4);font-family:'Space Mono',monospace;font-size:.72rem;">
+            Last: {utc_str} · Refresh: 5 s
+          </span>
+        </div>
+        """, unsafe_allow_html=True)
 
         if len(tdf) < 2:
             st.warning("Collecting telemetry…")
@@ -1153,8 +1333,9 @@ st.markdown("""
     <span class="tech-badge">One-Class SVM</span>
     <span class="tech-badge">Ensemble Learning</span>
     <span class="tech-badge">Keplerian Mechanics</span>
-    <span class="tech-badge">NASA Horizons API</span>
-    <span class="tech-badge">Real-Time Telemetry</span>
+    <span class="tech-badge">🛰️ NASA AROW (Tier 1)</span>
+    <span class="tech-badge">🔭 JPL Horizons -1024 (Tier 2)</span>
+    <span class="tech-badge">⚙️ Physics Sim (Tier 3)</span>
   </div>
   <p style="margin-top:1.5rem;font-size:.72rem;color:rgba(255,255,255,0.35);">
     Developed by Deep Rushil · GODSPEED ARTEMIS II · April 2026
