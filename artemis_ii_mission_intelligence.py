@@ -4,6 +4,8 @@ A professional-grade Data Science portfolio project showcasing:
 - Bayesian Inference for mission success prediction
 - Unsupervised ML for anomaly detection
 - Orbital mechanics simulation for strategic planning
+
+FIXED VERSION - Addresses 7 critical vulnerabilities for production deployment
 """
 
 import streamlit as st
@@ -240,9 +242,11 @@ def get_milestone_status():
     milestone_status = {}
     for milestone, data in MISSION_MILESTONES.items():
         is_completed = elapsed_minutes >= data['time_offset_minutes']
+        time_to_milestone = data['time_offset_minutes'] - elapsed_minutes
         milestone_status[milestone] = {
             'completed': is_completed,
-            'time_offset_minutes': data['time_offset_minutes']
+            'time_offset_minutes': data['time_offset_minutes'],
+            'time_remaining_minutes': max(0, time_to_milestone)
         }
     
     return milestone_status
@@ -313,11 +317,8 @@ class BayesianMissionSuccess:
         upper = stats.beta.ppf(1 - (1 - confidence) / 2, self.alpha, self.beta)
         return lower, upper
 
-# Bayesian model is now dynamically created in the display_mission_success fragment
-# This ensures it always reflects current milestone completion status
-
 # ═══════════════════════════════════════════════════════════════════════════
-# TELEMETRY & ANOMALY DETECTION
+# TELEMETRY & ANOMALY DETECTION (FIXED: Session State Storage)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def calculate_mission_profile():
@@ -330,11 +331,6 @@ def calculate_mission_profile():
     elapsed_hours = elapsed.total_seconds() / 3600
     
     # Known mission profile milestones
-    # Phase 1: High Earth Orbit (0-24 hours) - elliptical orbit
-    # Phase 2: TLI burn and translunar coast (24-96 hours)
-    # Phase 3: Lunar flyby (96-120 hours)
-    # Phase 4: Return to Earth (120-240 hours)
-    
     if elapsed_hours < 24:
         # High Earth Orbit phase
         perigee = 300  # km
@@ -349,26 +345,31 @@ def calculate_mission_profile():
         velocity = np.sqrt(398600 * (2/r - 1/a))
         
         distance_earth = altitude
-        distance_moon = 384400 - altitude  # Approximate
+        distance_moon = 384400 - altitude
+        
+        # FIXED: Inject deliberate anomaly at ICPS separation (2 hours)
+        if 1.9 < elapsed_hours < 2.1:
+            altitude += np.random.normal(0, 100)  # Separation transient
+            velocity += np.random.normal(0, 0.3)
         
     elif elapsed_hours < 96:
         # Translunar injection and coast
-        # Linear interpolation from Earth to lunar distance
         progress = (elapsed_hours - 24) / (96 - 24)
         distance_earth = 70000 + progress * (384400 - 70000)
         distance_moon = 384400 - distance_earth
         altitude = distance_earth
+        velocity = 10.0 - (progress * 9.0)
         
-        # Velocity decreases as spacecraft climbs out of Earth's gravity well
-        velocity = 10.0 - (progress * 9.0)  # From ~10 km/s to ~1 km/s
+        # FIXED: Inject deliberate anomaly during TLI burn (24 hours)
+        if 23.8 < elapsed_hours < 24.3:
+            velocity += np.random.normal(0, 0.4)  # Burn variance
         
     elif elapsed_hours < 120:
         # Lunar flyby phase
-        # Maximum distance from Earth
-        distance_earth = 384400 + 10000  # Slightly beyond Moon
-        distance_moon = 300  # Close approach altitude above Moon
+        distance_earth = 384400 + 10000
+        distance_moon = 300
         altitude = distance_earth
-        velocity = 2.0  # Lunar flyby velocity
+        velocity = 2.0
         
     else:
         # Return to Earth
@@ -376,7 +377,7 @@ def calculate_mission_profile():
         distance_earth = 400000 - progress * (400000 - 300)
         distance_moon = 384400 + (400000 - distance_earth)
         altitude = distance_earth
-        velocity = 1.0 + (progress * 10.0)  # Accelerating back to Earth
+        velocity = 1.0 + (progress * 10.0)
     
     return {
         'distance_earth_km': float(distance_earth),
@@ -384,67 +385,53 @@ def calculate_mission_profile():
         'velocity_km_s': float(velocity),
         'altitude_km': float(altitude),
         'met_seconds': int(elapsed.total_seconds()),
-        'source': 'calculated_profile'
+        'timestamp': current_time,
+        'source': 'simulated_profile'
     }
 
 def get_live_telemetry():
     """
-    Fetch real-time telemetry and build historical trajectory
-    Returns: DataFrame with timestamp, altitude, velocity
+    FIXED: Efficient telemetry with session state storage
+    Only recalculates new data points, not entire history
     """
-    # Get current real-time data
+    # Initialize session state storage
+    if 'telemetry_history' not in st.session_state:
+        st.session_state.telemetry_history = []
+        st.session_state.last_telemetry_update = None
+    
+    # Get current data
     current_data = calculate_mission_profile()
-    
-    # Build trajectory history from launch to now
     current_time = datetime.utcnow()
-    elapsed_hours = (current_time - MISSION_LAUNCH_UTC).total_seconds() / 3600
     
-    n_points = 100
-    time_range = np.linspace(0, elapsed_hours, n_points)
+    # FIXED: Only add new point if at least 5 seconds have passed
+    should_add = (
+        st.session_state.last_telemetry_update is None or
+        (current_time - st.session_state.last_telemetry_update).total_seconds() >= 5
+    )
     
-    telemetry_data = []
-    for t in time_range:
-        # For historical points, use calculated trajectory
-        point_time = MISSION_LAUNCH_UTC + timedelta(hours=float(t))
+    if should_add:
+        elapsed_hours = (current_time - MISSION_LAUNCH_UTC).total_seconds() / 3600
         
-        # Calculate what the spacecraft would have been doing at this time
-        if t < 24:
-            # High Earth Orbit
-            perigee = 300
-            apogee = 70000
-            period = 24
-            orbital_phase = (t / period) * 2 * np.pi
-            altitude = perigee + (apogee - perigee) * (1 + np.cos(orbital_phase)) / 2
-            r = altitude + 6371
-            a = (perigee + apogee) / 2 + 6371
-            velocity = np.sqrt(398600 * (2/r - 1/a))
-        else:
-            # Translunar trajectory
-            progress = (t - 24) / max((elapsed_hours - 24), 1)
-            altitude = 70000 + progress * (current_data['altitude_km'] - 70000)
-            velocity = 10.0 - (progress * (10.0 - current_data['velocity_km_s']))
+        # Add realistic noise to current point
+        current_data['altitude_km'] += np.random.normal(0, 10)
+        current_data['velocity_km_s'] += np.random.normal(0, 0.05)
         
-        # Add realistic noise
-        altitude += np.random.normal(0, 10)
-        velocity += np.random.normal(0, 0.05)
-        
-        telemetry_data.append({
-            'timestamp': point_time,
-            'altitude_km': altitude,
-            'velocity_km_s': velocity,
-            'met_hours': t
+        st.session_state.telemetry_history.append({
+            'timestamp': current_time,
+            'altitude_km': current_data['altitude_km'],
+            'velocity_km_s': current_data['velocity_km_s'],
+            'met_hours': elapsed_hours
         })
+        
+        st.session_state.last_telemetry_update = current_time
     
-    # Replace the last point with actual real-time data
-    if telemetry_data:
-        telemetry_data[-1]['altitude_km'] = current_data['altitude_km']
-        telemetry_data[-1]['velocity_km_s'] = current_data['velocity_km_s']
+    # Keep last 100 points (FIXED: Memory management)
+    if len(st.session_state.telemetry_history) > 100:
+        st.session_state.telemetry_history = st.session_state.telemetry_history[-100:]
     
-    df = pd.DataFrame(telemetry_data)
+    df = pd.DataFrame(st.session_state.telemetry_history)
     
-    # Store current data in session state for display
-    if 'current_telemetry' not in st.session_state:
-        st.session_state.current_telemetry = {}
+    # Store current data for display
     st.session_state.current_telemetry = current_data
     
     return df
@@ -454,6 +441,10 @@ def detect_anomalies(telemetry_df):
     Voting ensemble: Isolation Forest + One-Class SVM
     Returns: Anomaly scores and binary predictions
     """
+    if len(telemetry_df) < 10:
+        # Not enough data for anomaly detection
+        return np.zeros(len(telemetry_df)), np.ones(len(telemetry_df))
+    
     features = telemetry_df[['altitude_km', 'velocity_km_s']].values
     
     # Isolation Forest
@@ -469,8 +460,8 @@ def detect_anomalies(telemetry_df):
     # Voting ensemble: Anomaly if both agree
     ensemble_predictions = np.where((iso_predictions == -1) & (svm_predictions == -1), -1, 1)
     
-    # Normalize scores to [0, 1] range (0 = normal, 1 = anomaly)
-    anomaly_score = 1 - (iso_scores - iso_scores.min()) / (iso_scores.max() - iso_scores.min())
+    # Normalize scores to [0, 1] range
+    anomaly_score = 1 - (iso_scores - iso_scores.min()) / (iso_scores.max() - iso_scores.min() + 1e-10)
     
     return anomaly_score, ensemble_predictions
 
@@ -481,55 +472,33 @@ def detect_anomalies(telemetry_df):
 def simulate_tli_burn(thrust_pct, burn_duration_sec, ignition_vector_deg):
     """
     Physics-based orbital propagator for TLI burn simulation.
-    
-    Parameters:
-    - thrust_pct: Engine thrust percentage (80-105%)
-    - burn_duration_sec: Burn duration in seconds
-    - ignition_vector_deg: Direction of thrust vector (0-360°)
-    
-    Returns: Trajectory outcome, success flag, and trajectory data
     """
-    # Constants
     GM_EARTH = 398600  # km³/s²
     GM_MOON = 4903  # km³/s²
     MOON_DISTANCE = 384400  # km
     
-    # Initial conditions (in High Earth Orbit before TLI)
-    r0 = 70000 + 6371  # Current altitude + Earth radius
-    v0 = np.sqrt(GM_EARTH / r0)  # Circular velocity at current altitude
+    r0 = 70000 + 6371
+    v0 = np.sqrt(GM_EARTH / r0)
     
-    # TLI burn delta-v
-    nominal_dv = 3.1  # km/s (nominal TLI delta-v)
+    nominal_dv = 3.1  # km/s
     actual_dv = nominal_dv * (thrust_pct / 100) * (burn_duration_sec / 350)
     
-    # Velocity after burn
     v_post_burn = v0 + actual_dv
     
-    # Calculate trajectory
-    # Simplified 2-body problem: Check if escape velocity reached
     escape_velocity = np.sqrt(2 * GM_EARTH / r0)
     
-    # Generate trajectory points
     n_points = 200
-    time_steps = np.linspace(0, 100, n_points)  # hours
+    time_steps = np.linspace(0, 100, n_points)
     
     trajectory = []
     for t in time_steps:
-        # Simplified Keplerian orbit
         if v_post_burn >= escape_velocity:
-            # Hyperbolic trajectory (Earth escape)
             distance = r0 + v_post_burn * t * 3600
         else:
-            # Elliptical orbit (failed to escape)
-            # Semi-major axis
             energy = v_post_burn**2 / 2 - GM_EARTH / r0
             a = -GM_EARTH / (2 * energy)
-            
-            # Orbital phase
             mean_motion = np.sqrt(GM_EARTH / a**3)
             orbital_angle = mean_motion * t * 3600
-            
-            # Position (simplified circular approximation)
             distance = a * (1 + 0.5 * np.cos(orbital_angle))
         
         trajectory.append({
@@ -541,7 +510,6 @@ def simulate_tli_burn(thrust_pct, burn_duration_sec, ignition_vector_deg):
     
     trajectory_df = pd.DataFrame(trajectory)
     
-    # Determine outcome
     final_distance = trajectory_df.iloc[-1]['distance_km']
     
     if v_post_burn < escape_velocity * 0.95:
@@ -560,14 +528,13 @@ def simulate_tli_burn(thrust_pct, burn_duration_sec, ignition_vector_deg):
     return outcome, success, trajectory_df
 
 # ═══════════════════════════════════════════════════════════════════════════
-# JAVASCRIPT-BASED LIVE MET TIMER (CLIENT-SIDE, NO SERVER RELOAD)
+# JAVASCRIPT-BASED LIVE MET TIMER
 # ═══════════════════════════════════════════════════════════════════════════
 
 def display_live_met_timer():
-    """Display JavaScript-based MET timer using Streamlit components for reliable execution"""
+    """Display JavaScript-based MET timer"""
     launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
     
-    # Build HTML using template
     html_template = """
 <!DOCTYPE html>
 <html>
@@ -623,33 +590,41 @@ setInterval(updateMET,1000);
 st.markdown("""
 <div class="mission-header">
     <h1 class="mission-title">ARTEMIS II</h1>
-    <p class="mission-subtitle">Real-Time Mission Intelligence</p>
+    <p class="mission-subtitle">Real-Time Mission Intelligence Dashboard</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Mission patch and spacecraft imagery
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.markdown("""
     <div style="text-align: center; padding: 1rem;">
         <div style="font-size: 5rem; margin-bottom: 1rem;">🚀🌙</div>
         <p style="color: rgba(255,255,255,0.6); font-family: 'Space Mono', monospace; font-size: 0.9rem;">
-            ORION SPACECRAFT (INTEGRITY) • SLS BLOCK 1
+            ORION SPACECRAFT (INTEGRITY) • SLS BLOCK 1 • SIMULATED MISSION PROFILE
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-# Hero Metric - Mission Success Prediction (Dynamic)
-@st.fragment(run_every="10s")
+# FIXED: Renamed to "Milestone-Based Prediction" for accuracy
+@st.fragment(run_every="5s")
 def display_mission_success():
-    """Display dynamically updating mission success prediction"""
-    # Update Bayesian model with latest milestone completions
+    """Display milestone-based mission success prediction"""
     milestone_status = get_milestone_status()
     completed_count = sum(1 for m in milestone_status.values() if m['completed'])
     
-    # Reinitialize with updated counts
+    # FIXED: Incorporate anomaly data into Bayesian model
     bayesian_model = BayesianMissionSuccess()
-    bayesian_model.update(successes=completed_count, failures=0)
+    
+    # Get recent anomaly rate if telemetry exists
+    anomaly_penalty = 0
+    if 'telemetry_history' in st.session_state and len(st.session_state.telemetry_history) > 0:
+        recent_df = pd.DataFrame(st.session_state.telemetry_history[-20:])
+        if len(recent_df) >= 10:
+            _, anomaly_preds = detect_anomalies(recent_df)
+            recent_anomaly_rate = (anomaly_preds == -1).mean()
+            anomaly_penalty = int(recent_anomaly_rate * 3)
+    
+    bayesian_model.update(successes=completed_count, failures=anomaly_penalty)
     
     success_prob = bayesian_model.get_prediction()
     lower_ci, upper_ci = bayesian_model.get_credible_interval()
@@ -657,10 +632,11 @@ def display_mission_success():
     st.markdown(f"""
     <div class="hero-metric">
         <div class="hero-value">{success_prob*100:.1f}%</div>
-        <div class="hero-label">Live Mission Success Prediction</div>
+        <div class="hero-label">Milestone-Based Success Prediction</div>
         <p style="color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-top: 1rem; font-family: 'Space Mono', monospace;">
             Bayesian Beta-Binomial Model • 95% CI: [{lower_ci*100:.1f}%, {upper_ci*100:.1f}%]<br>
-            <span style="color: #00d4ff;">Completed Milestones: {completed_count}/{len(milestone_status)}</span>
+            <span style="color: #00d4ff;">Completed: {completed_count}/{len(milestone_status)} milestones</span>
+            {f' • Anomaly Penalty: {anomaly_penalty}' if anomaly_penalty > 0 else ''}
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -687,11 +663,22 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⏱️ MISSION ELAPSED TIME")
     
-    # Live MET counter (JavaScript-based, client-side updates)
     display_live_met_timer()
     
-    # Current mission phase
-    @st.fragment(run_every="10s")
+    # FIXED: Added update rate transparency
+    st.markdown("""
+    <div style="background: rgba(0,212,255,0.1); padding: 0.8rem; border-radius: 8px; margin: 1rem 0;">
+        <div style="font-size: 0.7rem; color: rgba(255,255,255,0.6); font-family: 'Space Mono', monospace;">
+            🔄 <b>Update Rates:</b><br>
+            • MET Timer: Real-time (1s)<br>
+            • Telemetry: Every 5s<br>
+            • Milestones: Every 5s<br>
+            • Prediction: Every 5s
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    @st.fragment(run_every="5s")
     def display_mission_phase():
         """Display current mission phase"""
         current_time = datetime.utcnow()
@@ -726,19 +713,27 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🎯 MILESTONE STATUS")
     
-    # Use fragment for auto-updating milestones
-    @st.fragment(run_every="10s")
+    # FIXED: Reduced refresh rate to 5s for better responsiveness
+    @st.fragment(run_every="5s")
     def display_milestones():
-        """Display dynamically updating milestone status"""
+        """Display dynamically updating milestone status with countdown"""
         milestone_status = get_milestone_status()
         
         for milestone, data in milestone_status.items():
             status_icon = "✅" if data['completed'] else "⏳"
             status_color = "#00ff00" if data['completed'] else "#ffd700"
+            
+            # FIXED: Show time to next milestone
+            time_display = ""
+            if not data['completed'] and data['time_remaining_minutes'] < 180:  # < 3 hours
+                hours = int(data['time_remaining_minutes'] // 60)
+                minutes = int(data['time_remaining_minutes'] % 60)
+                time_display = f" ({hours}h {minutes}m)"
+            
             st.markdown(f"""
             <div style="display: flex; align-items: center; margin: 0.5rem 0; font-family: 'Space Mono', monospace;">
                 <span style="font-size: 1.2rem; margin-right: 0.5rem;">{status_icon}</span>
-                <span style="color: {status_color}; font-size: 0.85rem;">{milestone}</span>
+                <span style="color: {status_color}; font-size: 0.85rem;">{milestone}{time_display}</span>
             </div>
             """, unsafe_allow_html=True)
     
@@ -750,140 +745,101 @@ with st.sidebar:
 
 tab1, tab2 = st.tabs(["📡 Live Mission Feed", "🧪 Strategic Simulation"])
 
-# ───────────────────────────────────────────────────────────────────────────
-# TAB 1: LIVE MISSION FEED (AUTO-REFRESHING)
-# ───────────────────────────────────────────────────────────────────────────
-
 with tab1:
     st.markdown("### 📊 Real-Time Telemetry Analysis")
     
-    # Use fragment for auto-refreshing content without full page reload
-    @st.fragment(run_every="1s")
+    @st.fragment(run_every="5s")
     def live_telemetry_display():
-        """Fragment that auto-refreshes every 1 second for real-time updates"""
+        """Fragment that auto-refreshes every 5 seconds"""
         
-        # Display data source
         current_utc = datetime.utcnow().strftime("%H:%M:%S UTC")
-        if 'current_telemetry' in st.session_state:
-            source = st.session_state.current_telemetry.get('source', 'calculated_profile')
-            if source == 'calculated_profile':
-                st.info(f"⚙️ **Data Source**: Mission profile calculations • Real-time updates: 1s • Last update: {current_utc}")
         
-        # Fetch telemetry
+        # FIXED: Clear labeling as simulated data
+        st.info(f"⚙️ **Data Source**: Physics-based simulation (not real NASA telemetry) • Updates: 5s • Last: {current_utc}")
+        
         telemetry_df = get_live_telemetry()
         
-        # Anomaly detection
+        if len(telemetry_df) < 2:
+            st.warning("Collecting telemetry data...")
+            return
+        
         anomaly_scores, anomaly_predictions = detect_anomalies(telemetry_df)
         telemetry_df['anomaly_score'] = anomaly_scores
         telemetry_df['is_anomaly'] = anomaly_predictions == -1
         
-        # Display metrics
         col1, col2, col3, col4, col5 = st.columns(5)
         
-        # Get current real-time data
         current_data = st.session_state.get('current_telemetry', {})
         
         with col1:
             current_altitude = telemetry_df.iloc[-1]['altitude_km']
-            st.metric(
-                "Current Altitude",
-                f"{current_altitude:,.0f} km",
-                delta=f"+{telemetry_df.iloc[-1]['altitude_km'] - telemetry_df.iloc[-2]['altitude_km']:.0f} km"
-            )
+            delta_alt = telemetry_df.iloc[-1]['altitude_km'] - telemetry_df.iloc[-2]['altitude_km']
+            st.metric("Current Altitude", f"{current_altitude:,.0f} km", delta=f"{delta_alt:+.0f} km")
         
         with col2:
             current_velocity = telemetry_df.iloc[-1]['velocity_km_s']
-            st.metric(
-                "Current Velocity",
-                f"{current_velocity:.2f} km/s",
-                delta=f"{telemetry_df.iloc[-1]['velocity_km_s'] - telemetry_df.iloc[-2]['velocity_km_s']:.3f} km/s"
-            )
+            delta_vel = telemetry_df.iloc[-1]['velocity_km_s'] - telemetry_df.iloc[-2]['velocity_km_s']
+            st.metric("Current Velocity", f"{current_velocity:.2f} km/s", delta=f"{delta_vel:+.3f} km/s")
         
         with col3:
             distance_earth = current_data.get('distance_earth_km', current_altitude)
-            st.metric(
-                "Distance from Earth",
-                f"{distance_earth:,.0f} km",
-                delta=f"{distance_earth/6371:.1f} Earth radii"
-            )
+            st.metric("Distance from Earth", f"{distance_earth:,.0f} km", delta=f"{distance_earth/6371:.1f}R⊕")
         
         with col4:
-            distance_moon = current_data.get('distance_moon_km', 384400 - current_altitude)
-            st.metric(
-                "Distance to Moon",
-                f"{distance_moon:,.0f} km",
-                delta=f"{100 * (1 - distance_moon/384400):.1f}% closer"
-            )
+            distance_moon = current_data.get('distance_moon_km', 384400)
+            st.metric("Distance to Moon", f"{distance_moon:,.0f} km", delta=f"{100 * (1 - distance_moon/384400):.1f}%")
         
         with col5:
             anomaly_count = telemetry_df['is_anomaly'].sum()
-            anomaly_pct = (anomaly_count / len(telemetry_df)) * 100
             avg_anomaly_score = telemetry_df['anomaly_score'].mean()
             status = "NOMINAL" if avg_anomaly_score < 0.3 else "CAUTION"
-            st.metric(
-                "Flight Status",
-                status,
-                delta=f"Anomaly: {anomaly_pct:.1f}%"
-            )
+            st.metric("Flight Status", status, delta=f"{anomaly_count} anomalies")
         
-        # Trajectory visualization
-        st.markdown("#### 🛰️ High Earth Orbit Trajectory")
+        st.markdown("#### 🛰️ Trajectory Profile")
         
         fig_trajectory = go.Figure()
         
-        # Nominal trajectory
         fig_trajectory.add_trace(go.Scatter(
             x=telemetry_df['met_hours'],
             y=telemetry_df['altitude_km'],
             mode='lines',
-            name='Altitude Profile',
+            name='Altitude',
             line=dict(color='#00d4ff', width=3),
-            hovertemplate='<b>MET:</b> %{x:.2f} hrs<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+            hovertemplate='<b>MET:</b> %{x:.2f}h<br><b>Alt:</b> %{y:,.0f}km<extra></extra>'
         ))
         
-        # Highlight anomalies
         anomaly_points = telemetry_df[telemetry_df['is_anomaly']]
         if len(anomaly_points) > 0:
             fig_trajectory.add_trace(go.Scatter(
                 x=anomaly_points['met_hours'],
                 y=anomaly_points['altitude_km'],
                 mode='markers',
-                name='Detected Anomalies',
+                name='Anomalies',
                 marker=dict(color='#ff0000', size=10, symbol='x'),
-                hovertemplate='<b>⚠️ ANOMALY</b><br>MET: %{x:.2f} hrs<br>Altitude: %{y:,.0f} km<extra></extra>'
+                hovertemplate='<b>⚠️ ANOMALY</b><br>MET: %{x:.2f}h<extra></extra>'
             ))
         
         fig_trajectory.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color='#ffffff', family='Rajdhani'),
-            xaxis=dict(
-                title='Mission Elapsed Time (hours)',
-                gridcolor='rgba(255,255,255,0.1)',
-                showgrid=True
-            ),
-            yaxis=dict(
-                title='Altitude (km)',
-                gridcolor='rgba(255,255,255,0.1)',
-                showgrid=True
-            ),
+            xaxis=dict(title='MET (hours)', gridcolor='rgba(255,255,255,0.1)', showgrid=True),
+            yaxis=dict(title='Altitude (km)', gridcolor='rgba(255,255,255,0.1)', showgrid=True),
             hovermode='x unified',
             height=500
         )
         
-        st.plotly_chart(fig_trajectory, use_container_width=True, key=f"trajectory_{datetime.now().timestamp()}")
+        # FIXED: Static key to prevent re-rendering
+        st.plotly_chart(fig_trajectory, use_container_width=True, key="trajectory_main")
         
-        # Anomaly detection gauge
-        st.markdown("#### 🔍 ML Anomaly Detection Ensemble")
-        st.markdown("*Voting ensemble: Isolation Forest + One-Class SVM*")
+        st.markdown("#### 🔍 ML Anomaly Detection")
+        st.markdown("*Ensemble: Isolation Forest + One-Class SVM on simulated telemetry*")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # Velocity vs Altitude scatter
             fig_scatter = go.Figure()
             
-            # Normal points
             normal_points = telemetry_df[~telemetry_df['is_anomaly']]
             fig_scatter.add_trace(go.Scatter(
                 x=normal_points['velocity_km_s'],
@@ -894,12 +850,11 @@ with tab1:
                     color=normal_points['anomaly_score'],
                     colorscale='Viridis',
                     size=8,
-                    colorbar=dict(title='Anomaly<br>Score')
+                    colorbar=dict(title='Score')
                 ),
-                hovertemplate='<b>Velocity:</b> %{x:.2f} km/s<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+                hovertemplate='<b>V:</b> %{x:.2f}<br><b>Alt:</b> %{y:,.0f}<extra></extra>'
             ))
             
-            # Anomaly points
             if len(anomaly_points) > 0:
                 fig_scatter.add_trace(go.Scatter(
                     x=anomaly_points['velocity_km_s'],
@@ -907,11 +862,11 @@ with tab1:
                     mode='markers',
                     name='Anomaly',
                     marker=dict(color='#ff0000', size=12, symbol='x'),
-                    hovertemplate='<b>⚠️ ANOMALY</b><br>Velocity: %{x:.2f} km/s<br>Altitude: %{y:,.0f} km<extra></extra>'
+                    hovertemplate='<b>⚠️</b> V: %{x:.2f}<extra></extra>'
                 ))
             
             fig_scatter.update_layout(
-                title='Feature Space Analysis',
+                title='Feature Space',
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
                 font=dict(color='#ffffff', family='Rajdhani'),
@@ -920,18 +875,18 @@ with tab1:
                 height=400
             )
             
-            st.plotly_chart(fig_scatter, use_container_width=True, key=f"scatter_{datetime.now().timestamp()}")
+            # FIXED: Static key
+            st.plotly_chart(fig_scatter, use_container_width=True, key="scatter_anomaly")
         
         with col2:
-            # Anomaly score gauge
             current_anomaly_score = telemetry_df.iloc[-1]['anomaly_score']
             
             fig_gauge = go.Figure(go.Indicator(
                 mode="gauge+number+delta",
                 value=current_anomaly_score * 100,
                 domain={'x': [0, 1], 'y': [0, 1]},
-                title={'text': "Current Anomaly Score", 'font': {'size': 20, 'color': '#ffffff'}},
-                delta={'reference': 30, 'increasing': {'color': '#ff0000'}, 'decreasing': {'color': '#00ff00'}},
+                title={'text': "Anomaly Score", 'font': {'size': 20, 'color': '#ffffff'}},
+                delta={'reference': 30, 'increasing': {'color': '#ff0000'}},
                 gauge={
                     'axis': {'range': [0, 100], 'tickcolor': '#ffffff'},
                     'bar': {'color': '#00d4ff'},
@@ -943,11 +898,7 @@ with tab1:
                         {'range': [30, 70], 'color': 'rgba(255,215,0,0.2)'},
                         {'range': [70, 100], 'color': 'rgba(255,0,0,0.2)'}
                     ],
-                    'threshold': {
-                        'line': {'color': 'red', 'width': 4},
-                        'thickness': 0.75,
-                        'value': 70
-                    }
+                    'threshold': {'line': {'color': 'red', 'width': 4}, 'value': 70}
                 }
             ))
             
@@ -958,120 +909,71 @@ with tab1:
                 height=400
             )
             
-            st.plotly_chart(fig_gauge, use_container_width=True, key=f"gauge_{datetime.now().timestamp()}")
+            # FIXED: Static key
+            st.plotly_chart(fig_gauge, use_container_width=True, key="gauge_anomaly")
     
-    # Call the auto-refreshing fragment
     live_telemetry_display()
 
-# ───────────────────────────────────────────────────────────────────────────
-# TAB 2: STRATEGIC SIMULATION (NO AUTO-REFRESH)
-# ───────────────────────────────────────────────────────────────────────────
-
 with tab2:
-    st.markdown("### 🚀 Translunar Injection (TLI) Burn Simulator")
-    st.markdown("*Physics-based orbital propagator for strategic mission planning*")
+    st.markdown("### 🚀 TLI Burn Simulator")
+    st.markdown("*Keplerian orbital mechanics for strategic planning*")
     
     st.markdown("---")
     
-    # Control panel
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        thrust_pct = st.slider(
-            "Engine Thrust (%)",
-            min_value=80,
-            max_value=105,
-            value=100,
-            step=1,
-            help="Nominal: 100% | Range: 80-105%"
-        )
+        thrust_pct = st.slider("Engine Thrust (%)", 80, 105, 100, 1, help="Nominal: 100%")
     
     with col2:
-        burn_duration = st.slider(
-            "Burn Duration (seconds)",
-            min_value=250,
-            max_value=450,
-            value=350,
-            step=10,
-            help="Nominal: 350 seconds"
-        )
+        burn_duration = st.slider("Burn Duration (s)", 250, 450, 350, 10, help="Nominal: 350s")
     
     with col3:
-        ignition_vector = st.slider(
-            "Ignition Vector (degrees)",
-            min_value=0,
-            max_value=360,
-            value=90,
-            step=5,
-            help="Direction of thrust vector"
-        )
+        ignition_vector = st.slider("Ignition Vector (°)", 0, 360, 90, 5, help="Thrust direction")
     
-    # Run simulation button
     if st.button("🔥 EXECUTE TLI BURN SIMULATION", type="primary"):
-        with st.spinner("Propagating orbital trajectory..."):
-            outcome, success, trajectory_df = simulate_tli_burn(
-                thrust_pct, burn_duration, ignition_vector
-            )
-            
+        with st.spinner("Propagating trajectory..."):
+            outcome, success, trajectory_df = simulate_tli_burn(thrust_pct, burn_duration, ignition_vector)
             st.session_state.sim_outcome = outcome
             st.session_state.sim_success = success
             st.session_state.sim_trajectory = trajectory_df
     
-    # Display results
     if 'sim_outcome' in st.session_state:
         st.markdown("---")
         
-        # Outcome banner
         outcome_color = "#00ff00" if st.session_state.sim_success else "#ff0000"
         st.markdown(f"""
         <div style="background: rgba(0,212,255,0.1); border: 3px solid {outcome_color}; 
                     border-radius: 15px; padding: 2rem; margin: 2rem 0; text-align: center;">
-            <h2 style="color: {outcome_color}; font-family: 'Rajdhani', sans-serif; 
-                       font-size: 2rem; margin: 0;">
+            <h2 style="color: {outcome_color}; font-family: 'Rajdhani', sans-serif; font-size: 2rem; margin: 0;">
                 {st.session_state.sim_outcome}
             </h2>
         </div>
         """, unsafe_allow_html=True)
         
-        # Trajectory visualization
         st.markdown("#### 🌍➡️🌙 Simulated Trajectory")
         
         fig_sim = go.Figure()
         
-        # Earth
         fig_sim.add_trace(go.Scatter(
-            x=[0], y=[0],
-            mode='markers+text',
-            name='Earth',
-            marker=dict(size=30, color='#00d4ff'),
-            text=['🌍'],
-            textfont=dict(size=40),
-            hovertemplate='<b>Earth</b><extra></extra>'
+            x=[0], y=[0], mode='markers+text', name='Earth',
+            marker=dict(size=30, color='#00d4ff'), text=['🌍'], textfont=dict(size=40)
         ))
         
-        # Moon position (approximate)
         moon_x = 384400 * np.cos(np.radians(45))
         moon_y = 384400 * np.sin(np.radians(45))
         fig_sim.add_trace(go.Scatter(
-            x=[moon_x], y=[moon_y],
-            mode='markers+text',
-            name='Moon',
-            marker=dict(size=20, color='#ffd700'),
-            text=['🌙'],
-            textfont=dict(size=30),
-            hovertemplate='<b>Moon</b><extra></extra>'
+            x=[moon_x], y=[moon_y], mode='markers+text', name='Moon',
+            marker=dict(size=20, color='#ffd700'), text=['🌙'], textfont=dict(size=30)
         ))
         
-        # Trajectory
         trajectory_color = '#00ff00' if st.session_state.sim_success else '#ff0000'
         fig_sim.add_trace(go.Scatter(
             x=st.session_state.sim_trajectory['x_km'],
             y=st.session_state.sim_trajectory['y_km'],
-            mode='lines',
-            name='Spacecraft Trajectory',
+            mode='lines', name='Trajectory',
             line=dict(color=trajectory_color, width=3),
-            hovertemplate='<b>Time:</b> %{customdata:.1f} hrs<br>' +
-                          '<b>Distance:</b> %{text:,.0f} km<extra></extra>',
+            hovertemplate='<b>T:</b> %{customdata:.1f}h<br><b>D:</b> %{text:,.0f}km<extra></extra>',
             customdata=st.session_state.sim_trajectory['time_hours'],
             text=st.session_state.sim_trajectory['distance_km']
         ))
@@ -1080,62 +982,49 @@ with tab2:
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color='#ffffff', family='Rajdhani'),
-            xaxis=dict(
-                title='X Position (km)',
-                gridcolor='rgba(255,255,255,0.1)',
-                showgrid=True,
-                scaleanchor="y",
-                scaleratio=1
-            ),
-            yaxis=dict(
-                title='Y Position (km)',
-                gridcolor='rgba(255,255,255,0.1)',
-                showgrid=True
-            ),
-            height=600,
-            hovermode='closest'
+            xaxis=dict(title='X (km)', gridcolor='rgba(255,255,255,0.1)', scaleanchor="y", scaleratio=1),
+            yaxis=dict(title='Y (km)', gridcolor='rgba(255,255,255,0.1)'),
+            height=600
         )
         
         st.plotly_chart(fig_sim, use_container_width=True)
         
-        # Mission parameters summary
-        st.markdown("#### 📊 Burn Parameters Analysis")
+        st.markdown("#### 📊 Burn Analysis")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             delta_v = 3.1 * (thrust_pct / 100) * (burn_duration / 350)
-            st.metric("Calculated ΔV", f"{delta_v:.3f} km/s")
+            st.metric("ΔV", f"{delta_v:.3f} km/s")
         
         with col2:
-            final_distance = st.session_state.sim_trajectory.iloc[-1]['distance_km']
-            st.metric("Final Distance", f"{final_distance:,.0f} km")
+            final_dist = st.session_state.sim_trajectory.iloc[-1]['distance_km']
+            st.metric("Final Distance", f"{final_dist:,.0f} km")
         
         with col3:
             efficiency = (thrust_pct / 100) * (burn_duration / 350) * 100
-            st.metric("Burn Efficiency", f"{efficiency:.1f}%")
+            st.metric("Efficiency", f"{efficiency:.1f}%")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FOOTER: DATA SCIENCE METHODOLOGY
+# FOOTER
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.markdown("""
 <div class="tech-footer">
     <h3 style="color: #00d4ff; font-family: 'Rajdhani', sans-serif; margin-bottom: 1rem;">
-        🔬 Data Science Methodologies Implemented
+        🔬 Data Science Portfolio Project
     </h3>
     <div>
         <span class="tech-badge">Bayesian Inference</span>
-        <span class="tech-badge">Beta-Binomial Conjugate Priors</span>
+        <span class="tech-badge">Beta-Binomial Model</span>
         <span class="tech-badge">Isolation Forest</span>
         <span class="tech-badge">One-Class SVM</span>
-        <span class="tech-badge">Ensemble Voting</span>
-        <span class="tech-badge">Keplerian Orbital Mechanics</span>
-        <span class="tech-badge">Real-Time Anomaly Detection</span>
-        <span class="tech-badge">Physics-Based Simulation</span>
+        <span class="tech-badge">Ensemble Learning</span>
+        <span class="tech-badge">Keplerian Mechanics</span>
+        <span class="tech-badge">Real-Time Simulation</span>
     </div>
     <p style="margin-top: 1.5rem; font-size: 0.75rem; color: rgba(255,255,255,0.4);">
-        Developed by Rushil | Portfolio Project | April 2026
+        Developed by Deep Rushil | GODSPEED ARTEMIS II | April 2026
     </p>
 </div>
 """, unsafe_allow_html=True)
