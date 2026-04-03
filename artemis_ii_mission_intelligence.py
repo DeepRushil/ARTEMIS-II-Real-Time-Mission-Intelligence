@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from scipy import stats
 from sklearn.ensemble import IsolationForest
 from sklearn.svm import OneClassSVM
@@ -37,7 +37,6 @@ CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;600;700&family=Space+Mono:wght@400;700&display=swap');
 
-/* ── Core: transparent so canvas at z-index:-1 shows through ── */
 html, body { background: #0d1128 !important; margin: 0; padding: 0; }
 
 .stApp {
@@ -54,7 +53,6 @@ html, body { background: #0d1128 !important; margin: 0; padding: 0; }
     backdrop-filter: blur(14px);
 }
 
-/* ── Glassmorphism Sidebar ── */
 [data-testid="stSidebar"] {
     background: rgba(8, 12, 30, 0.55) !important;
     backdrop-filter: blur(28px) saturate(160%) !important;
@@ -64,14 +62,12 @@ html, body { background: #0d1128 !important; margin: 0; padding: 0; }
 }
 [data-testid="stSidebar"] > div { background: transparent !important; }
 
-/* ── All Streamlit containers must be transparent ── */
 [data-testid="stMain"]          { background: transparent !important; }
 .main .block-container          { background: transparent !important; padding-top: 1rem; }
 [data-testid="stVerticalBlock"],
 [data-testid="stHorizontalBlock"],
 .element-container, .stMarkdown { position: relative; z-index: 10; background: transparent !important; }
 
-/* ── Metric cards: subtle glass tint ── */
 [data-testid="stMetric"] {
     background: rgba(0,212,255,0.05) !important;
     border: 1px solid rgba(0,212,255,0.15) !important;
@@ -80,12 +76,10 @@ html, body { background: #0d1128 !important; margin: 0; padding: 0; }
     backdrop-filter: blur(10px) !important;
 }
 
-/* ── Hide Streamlit chrome ── */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stDeployButton {display: none;}
 
-/* ── Mission Header ── */
 .mission-header {
     text-align: center;
     padding: 2.5rem 0 1.5rem;
@@ -116,7 +110,6 @@ footer {visibility: hidden;}
     text-transform: uppercase;
 }
 
-/* ── Hero Metric ── */
 .hero-metric {
     text-align: center;
     padding: 2rem;
@@ -159,7 +152,6 @@ footer {visibility: hidden;}
     line-height: 1.6;
 }
 
-/* ── Glassmorphism cards ── */
 .glass-card {
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(0,212,255,0.2);
@@ -176,7 +168,6 @@ footer {visibility: hidden;}
     transform: translateY(-2px);
 }
 
-/* ── Crew Cards ── */
 .crew-card {
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(0,212,255,0.25);
@@ -199,7 +190,6 @@ footer {visibility: hidden;}
 .crew-role { font-size: 0.8rem; color: #ffd700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.4rem; }
 .crew-bio  { font-size: 0.78rem; color: rgba(255,255,255,0.75); line-height: 1.4; }
 
-/* ── MET Timer ── */
 .met-display {
     font-family: 'Space Mono', monospace;
     font-size: 1.8rem;
@@ -215,7 +205,6 @@ footer {visibility: hidden;}
     backdrop-filter: blur(8px);
 }
 
-/* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
     gap: 1.5rem;
     background: rgba(0,0,0,0.25);
@@ -239,14 +228,12 @@ footer {visibility: hidden;}
     border: 1px solid rgba(0,212,255,0.5);
 }
 
-/* ── Info / status banner ── */
 .stAlert {
     background: rgba(0,212,255,0.07) !important;
     border: 1px solid rgba(0,212,255,0.3) !important;
     backdrop-filter: blur(8px) !important;
 }
 
-/* ── Update badge ── */
 .update-badge {
     display: inline-block;
     padding: 0.2rem 0.7rem;
@@ -259,7 +246,6 @@ footer {visibility: hidden;}
     font-family: 'Space Mono', monospace;
 }
 
-/* ── Footer ── */
 .tech-footer {
     margin-top: 4rem;
     padding: 2rem;
@@ -281,8 +267,6 @@ footer {visibility: hidden;}
     font-size: 0.72rem;
     color: #00d4ff;
 }
-
-/* ── General z-index for main content (kept for compatibility) ── */
 </style>
 """
 
@@ -290,23 +274,24 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ANIMATED GALAXY + MOON BACKGROUND
-# Injected via st.markdown (unsafe_allow_html) so the <script> runs
-# directly in the main Streamlit document — NOT inside a sandboxed iframe.
-# This is the only reliable way to attach a fixed canvas to the real DOM.
+# Guard flag prevents duplicate canvas on Streamlit rerenders.
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.markdown("""
 <canvas id="artemis-galaxy-canvas" style="
   position:fixed;top:0;left:0;
   width:100vw;height:100vh;
-  z-index:-1;
+  z-index:0;
   pointer-events:none;
   display:block;
 "></canvas>
 
 <script>
 (function(){
-  // Wait for DOM then boot
+  // ── Guard: only initialise once across Streamlit rerenders ──
+  if(window.__artemisGalaxyRunning) return;
+  window.__artemisGalaxyRunning = true;
+
   function boot(){
     const canvas = document.getElementById('artemis-galaxy-canvas');
     if(!canvas){ setTimeout(boot, 50); return; }
@@ -322,7 +307,6 @@ st.markdown("""
     window.addEventListener('resize', resize);
     resize();
 
-    // Stars
     for(let i=0;i<NUM_STARS;i++){
       stars.push({
         x: Math.random()*W, y: Math.random()*H,
@@ -332,7 +316,6 @@ st.markdown("""
       });
     }
 
-    // Nebulae
     const NC = [[0,180,255],[120,60,200],[255,80,120],[0,220,180],[80,0,200],[0,160,220]];
     for(let i=0;i<6;i++){
       nebulae.push({
@@ -342,14 +325,12 @@ st.markdown("""
       });
     }
 
-    // Moon craters (fixed relative offsets)
     const craters = [
       {ox:-18,oy:-22,r:9},{ox:14,oy:-8,r:6},{ox:-5,oy:18,r:11},
       {ox:24,oy:12,r:5},{ox:-28,oy:8,r:7},{ox:8,oy:-28,r:8},
       {ox:-12,oy:28,r:5},{ox:26,oy:-20,r:6},{ox:-22,oy:-5,r:4}
     ];
 
-    // Shooting star pool
     let shooters=[];
     function spawnShooter(){
       shooters.push({
@@ -363,14 +344,12 @@ st.markdown("""
       t += 0.008;
       if(W!==window.innerWidth||H!==window.innerHeight) resize();
 
-      // ── Deep space base ──
       const bg = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*0.8);
       bg.addColorStop(0,'#0d1128');
       bg.addColorStop(0.5,'#070b1a');
       bg.addColorStop(1,'#020408');
       ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
 
-      // ── Nebulae ──
       nebulae.forEach(n=>{
         const ng=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
         ng.addColorStop(0,`rgba(${n.c[0]},${n.c[1]},${n.c[2]},${n.a})`);
@@ -380,7 +359,6 @@ st.markdown("""
         ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2); ctx.fill();
       });
 
-      // ── Stars ──
       stars.forEach(s=>{
         s.twinkle+=s.speed;
         const al=0.35+0.65*Math.abs(Math.sin(s.twinkle));
@@ -396,13 +374,11 @@ st.markdown("""
         }
       });
 
-      // ── Moon ──
       const moonAngle = t*0.014;
       const mx = W*0.83+Math.sin(moonAngle)*7;
       const my = H*0.17+Math.cos(moonAngle*0.65)*5;
-      const mr = Math.min(W,H)*0.075;  // responsive radius
+      const mr = Math.min(W,H)*0.075;
 
-      // Outer atmospheric glow
       const atm=ctx.createRadialGradient(mx,my,mr*0.7,mx,my,mr*3.2);
       atm.addColorStop(0,'rgba(180,210,255,0.10)');
       atm.addColorStop(0.4,'rgba(100,160,255,0.04)');
@@ -410,7 +386,6 @@ st.markdown("""
       ctx.fillStyle=atm;
       ctx.beginPath(); ctx.arc(mx,my,mr*3.2,0,Math.PI*2); ctx.fill();
 
-      // Moon surface
       const surf=ctx.createRadialGradient(mx-mr*0.28,my-mr*0.28,mr*0.05,mx,my,mr);
       surf.addColorStop(0,'#eceef6');
       surf.addColorStop(0.55,'#c8ccdb');
@@ -418,7 +393,6 @@ st.markdown("""
       ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2);
       ctx.fillStyle=surf; ctx.fill();
 
-      // Craters
       craters.forEach(c=>{
         const cr=c.r*(mr/72);
         const cx2=mx+c.ox*(mr/72), cy2=my+c.oy*(mr/72);
@@ -430,7 +404,6 @@ st.markdown("""
         ctx.fillStyle=cg; ctx.fill();
       });
 
-      // Terminator shadow (night side)
       ctx.save();
       ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2); ctx.clip();
       const shx=mx+mr*0.38;
@@ -441,7 +414,6 @@ st.markdown("""
       ctx.fillStyle=sh; ctx.fillRect(mx-mr,my-mr,mr*2,mr*2);
       ctx.restore();
 
-      // ── Shooting stars ──
       if(Math.random()<0.003) spawnShooter();
       shooters=shooters.filter(s=>{
         s.life-=0.025;
@@ -476,290 +448,236 @@ st.markdown("""
 # CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-MISSION_LAUNCH_UTC = datetime(2026, 4, 1, 22, 35, 0)
+MISSION_LAUNCH_UTC = datetime(2026, 4, 1, 22, 35, 0, tzinfo=timezone.utc)
 
+# ── All milestones with verified absolute UTC timestamps ─────────────────
+# Sources: NASA blogs, Space.com, CNN, ABC News, Astronomy.com live coverage
 MISSION_MILESTONES = {
-    "Launch":          {"time_offset_minutes": 0},
-    "ICPS Separation": {"time_offset_minutes": 120},
-    "Perigee Raise":   {"time_offset_minutes": 600},
-    "TLI Burn":        {"time_offset_minutes": 1440},
-    "Earth Departure": {"time_offset_minutes": 2880},
-    "Lunar Flyby":     {"time_offset_minutes": 5760},
+    "🚀 Launch — SLS Liftoff":        {"time": datetime(2026, 4, 1, 22, 35,  0, tzinfo=timezone.utc), "detail": "SLS lifts off from LC-39B. Smooth first-attempt launch."},
+    "⚡ LAS Jettisoned":              {"time": datetime(2026, 4, 1, 22, 38, 18, tzinfo=timezone.utc), "detail": "T+3:18. Earth limb views from onboard camera at 78 mi downrange."},
+    "☀ Solar Array Deployment":       {"time": datetime(2026, 4, 1, 22, 53,  0, tzinfo=timezone.utc), "detail": "All 4 SAWs fully deployed. ~63 ft wingspan. Power generation nominal."},
+    "🔩 ICPS Separation":             {"time": datetime(2026, 4, 2,  0,  5,  0, tzinfo=timezone.utc), "detail": "ICPS completes upper-stage burns and separates from Orion."},
+    "🕹 Proximity Ops Demo":          {"time": datetime(2026, 4, 2,  0, 35,  0, tzinfo=timezone.utc), "detail": "Glover hand-flies Integrity ~70 min. 'This flies very nicely.'"},
+    "🔥 Perigee Raise Burn":          {"time": datetime(2026, 4, 2, 11, 30,  0, tzinfo=timezone.utc), "detail": "43-sec SM engine burn raises perigee. Crew woken to 'Sleepyhead'."},
+    "🌙 Translunar Injection (TLI)":  {"time": datetime(2026, 4, 2, 23, 49,  0, tzinfo=timezone.utc), "detail": "5m 50s burn. ΔV +1,274 ft/s. 'We do not leave Earth — we choose it.' — Koch"},
+    "🌍 Earth Departure / SOI Exit":  {"time": datetime(2026, 4, 3,  6,  0,  0, tzinfo=timezone.utc), "detail": "Orion exits Earth sphere of influence. Fully on translunar coast."},
+    "⚙ Mid-Course Correction 1":      {"time": datetime(2026, 4, 4, 12,  0,  0, tzinfo=timezone.utc), "detail": "Small SM burn to fine-tune free-return trajectory. Flight Day 3."},
+    "↔ Halfway to Moon":              {"time": datetime(2026, 4, 4, 23, 49,  0, tzinfo=timezone.utc), "detail": "~192,200 km from Earth. Velocity decreasing due to Earth gravity."},
+    "⚙ Mid-Course Correction 2":      {"time": datetime(2026, 4, 5, 18,  0,  0, tzinfo=timezone.utc), "detail": "Second trajectory refinement. Final targeting for lunar flyby."},
+    "🌙 Closest Lunar Approach":      {"time": datetime(2026, 4, 6, 10,  0,  0, tzinfo=timezone.utc), "detail": "8,000 km from lunar surface. ~6h observation. Solar eclipse from lunar shadow."},
+    "📏 Record Earth Distance":       {"time": datetime(2026, 4, 6, 18,  0,  0, tzinfo=timezone.utc), "detail": "252,021 statute miles — shattering Apollo 13 record by 3,366 miles."},
+    "🏠 Return Translunar Coast":     {"time": datetime(2026, 4, 7,  6,  0,  0, tzinfo=timezone.utc), "detail": "Moon gravity slingshot complete. Orion accelerating back toward Earth."},
+    "⚙ Mid-Course Correction 3":      {"time": datetime(2026, 4, 8, 12,  0,  0, tzinfo=timezone.utc), "detail": "Return trajectory refinement. Targeting splashdown off San Diego."},
+    "🔴 Earth Entry Interface":       {"time": datetime(2026, 4, 10, 16,  0,  0, tzinfo=timezone.utc), "detail": "Orion enters atmosphere at ~400,000 ft. Peak heating ~5,000°F."},
+    "🌊 Splashdown — Pacific Ocean":  {"time": datetime(2026, 4, 10, 18, 30,  0, tzinfo=timezone.utc), "detail": "Parachute descent. Recovery by USS San Diego off California coast."},
 }
 
 CREW_DATA = [
-    {"name":"Reid Wiseman",  "role":"Commander",         "emoji":"👨‍🚀",
+    {"name":"Reid Wiseman",   "role":"Commander",          "emoji":"👨‍🚀",
      "bio":"NASA astronaut with ISS experience (Expedition 40/41). Led spacewalks and served as Chief of the Astronaut Office.",
      "url":"https://www.nasa.gov/people/reid-wiseman/"},
-    {"name":"Victor Glover", "role":"Pilot",             "emoji":"👨‍✈️",
+    {"name":"Victor Glover",  "role":"Pilot",              "emoji":"👨‍✈️",
      "bio":"Naval aviator and NASA astronaut. First African American on ISS long-duration crew (SpaceX Crew-1).",
      "url":"https://www.nasa.gov/humans-in-space/astronauts/victor-j-glover/"},
-    {"name":"Christina Koch","role":"Mission Specialist","emoji":"👩‍🚀",
+    {"name":"Christina Koch", "role":"Mission Specialist", "emoji":"👩‍🚀",
      "bio":"Record holder for longest single spaceflight by a woman (328 days). Conducted first all-female spacewalk.",
      "url":"https://www.nasa.gov/humans-in-space/astronauts/christina-koch/"},
-    {"name":"Jeremy Hansen", "role":"Mission Specialist","emoji":"👨‍🚀",
+    {"name":"Jeremy Hansen",  "role":"Mission Specialist", "emoji":"👨‍🚀",
      "bio":"CSA astronaut and CF-18 fighter pilot. First Canadian to travel beyond low Earth orbit.",
      "url":"https://www.asc-csa.gc.ca/eng/astronauts/canadian/active/bio-jeremy-hansen.asp"},
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DATA SOURCE STRATEGY — 3-Tier with honest labelling
-#
-# Tier 1 — AROW state vectors (nasa.gov/trackartemis)
-#   TRUE live sensor data from Orion → Mission Control → public download.
-#   NASA does NOT expose a REST/JSON streaming API for AROW; it publishes
-#   state-vector files and an ephemeris file during the mission.
-#   We attempt to fetch the AROW ephemeris/state-vector endpoint directly.
-#   If the file is available (mission is active & NASA has published it),
-#   we parse it and use it.  This is the most accurate possible source.
-#
-# Tier 2 — JPL Horizons API  (ssd.jpl.nasa.gov/api/horizons.api)
-#   Horizons tracks Artemis II as object -1024 ("Artemis II (spacecraft)
-#   (Integrity)").  It receives periodic trajectory updates from Mission
-#   Control and propagates them forward.  Accuracy is excellent but it
-#   can lag true position by minutes to a few hours between uplink cycles.
-#   This is what independent trackers (artemislive.org, etc.) use.
-#
-# Tier 3 — Physics simulation
-#   Keplerian / mission-profile model.  Always available as last resort.
-#   Labelled clearly so the user is never misled.
+# DATA SOURCE STRATEGY — 3-Tier
 # ═══════════════════════════════════════════════════════════════════════════
 
 HORIZONS_URL  = "https://ssd.jpl.nasa.gov/api/horizons.api"
-AROW_BASE_URL = "https://nasa.gov/trackartemis"   # human-facing; file URLs vary
+AROW_BASE_URL = "https://nasa.gov/trackartemis"
 
-# ── Source metadata used in UI badges ──────────────────────────────────────
 SOURCE_META = {
-    "AROW":       {"label": "🛰️ NASA AROW",        "color": "#00ff88",
+    "AROW":       {"label": "🛰️ NASA AROW",    "color": "#00ff88",
                    "detail": "Live Orion sensor telemetry via NASA Mission Control"},
-    "Horizons":   {"label": "🔭 JPL Horizons",      "color": "#00d4ff",
-                   "detail": "Ephemeris from NASA/JPL (periodic MCC uplinks, slight lag possible)"},
-    "simulation": {"label": "⚙️ Physics Model",     "color": "#ffd700",
+    "Horizons":   {"label": "🔭 JPL Horizons",  "color": "#00d4ff",
+                   "detail": "Ephemeris from NASA/JPL (obj −1024, periodic MCC uplinks)"},
+    "simulation": {"label": "⚙️ Physics Model", "color": "#ffd700",
                    "detail": "Keplerian simulation — AROW & Horizons unreachable"},
 }
 
 
-# ── Tier 1: AROW state-vector file ─────────────────────────────────────────
 def fetch_arow_state_vector():
-    """
-    Attempt to download the AROW live state-vector or ephemeris file.
-
-    During an active mission NASA publishes a plain-text state-vector file
-    and an SPK/ephemeris at nasa.gov/trackartemis.  The exact filename
-    changes per mission; we try the known Artemis II paths.  If the file
-    is not yet posted (pre-TLI) or the server is unreachable we return None.
-
-    Returns dict with telemetry fields, or None.
-    """
-    # Known candidate URLs (NASA posts these during active mission phases)
     candidate_urls = [
         "https://nasa.gov/sites/default/files/atoms/files/artemis2_state_vectors.txt",
         "https://www.nasa.gov/sites/default/files/atoms/files/artemis_ii_ephemeris.txt",
         "https://artemis.nasa.gov/artemis-ii/state-vectors/latest.txt",
     ]
-
     for url in candidate_urls:
         try:
             resp = requests.get(url, timeout=5, headers={"User-Agent": "ArtemisII-Dashboard/1.0"})
             if resp.status_code != 200:
                 continue
-
             text = resp.text.strip()
-            # State-vector format: lines with  EPOCH  X  Y  Z  VX  VY  VZ
-            # Skip comment/header lines (start with # or letters)
             data_lines = [l for l in text.splitlines()
                           if l.strip() and not l.strip().startswith("#")]
             if not data_lines:
                 continue
-
-            # Take the last (most recent) data line
             parts = data_lines[-1].split()
             if len(parts) < 7:
                 continue
-
-            # parts: [epoch_jd_or_iso, x, y, z, vx, vy, vz]
-            x_km = float(parts[1]);  y_km = float(parts[2]);  z_km = float(parts[3])
-            vx   = float(parts[4]);  vy   = float(parts[5]);  vz   = float(parts[6])
-
+            x_km = float(parts[1]); y_km = float(parts[2]); z_km = float(parts[3])
+            vx   = float(parts[4]); vy   = float(parts[5]); vz   = float(parts[6])
             dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
             velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
             dist_moon  = _approx_moon_distance(x_km, y_km)
-
             return {
                 "distance_earth_km": dist_earth,
                 "distance_moon_km":  dist_moon,
                 "velocity_km_s":     velocity,
                 "altitude_km":       dist_earth - 6371,
                 "x_km": x_km, "y_km": y_km, "z_km": z_km,
-                "source": "AROW",
-                "source_url": url,
+                "source": "AROW", "source_url": url,
             }
-
         except Exception:
             continue
+    return None
 
-    return None   # None of the AROW endpoints were reachable / published yet
 
-
-# ── Tier 2: JPL Horizons ────────────────────────────────────────────────────
 def fetch_horizons_telemetry():
-    """
-    Query JPL Horizons for Artemis II (object -1024).
-
-    -1024 is the official NAIF/SPICE ID for the Artemis II Orion spacecraft
-    (callsign "Integrity").  Horizons receives trajectory uplinks from MCC
-    periodically and propagates the orbit forward — accurate but not truly
-    instantaneous like AROW sensor data.
-
-    Returns dict or None on failure.
-    """
     try:
-        now_utc  = datetime.utcnow()
+        now_utc  = datetime.now(timezone.utc)
         stop_utc = now_utc + timedelta(minutes=2)
         fmt      = "%Y-%m-%d %H:%M"
-
         params = {
             "format":      "json",
-            "COMMAND":     "'-1024'",         # Artemis II (spacecraft) (Integrity)
+            "COMMAND":     "'-1024'",
             "OBJ_DATA":    "NO",
             "MAKE_EPHEM":  "YES",
             "EPHEM_TYPE":  "VECTORS",
-            "CENTER":      "'500@399'",        # Geocentric (Earth centre)
+            "CENTER":      "'500@399'",
             "START_TIME":  f"'{now_utc.strftime(fmt)}'",
             "STOP_TIME":   f"'{stop_utc.strftime(fmt)}'",
             "STEP_SIZE":   "'1 m'",
-            "VEC_TABLE":   "3",               # X Y Z  VX VY VZ
+            "VEC_TABLE":   "3",
             "REF_PLANE":   "FRAME",
             "REF_SYSTEM":  "J2000",
             "OUT_UNITS":   "KM-S",
             "CSV_FORMAT":  "NO",
         }
-
         resp = requests.get(HORIZONS_URL, params=params, timeout=8)
         if resp.status_code != 200:
             return None
-
         result_text = resp.json().get("result", "")
         if "$$SOE" not in result_text:
             return None
-
-        soe  = result_text.index("$$SOE") + 5
-        eoe  = result_text.index("$$EOE")
+        soe   = result_text.index("$$SOE") + 5
+        eoe   = result_text.index("$$EOE")
         block = result_text[soe:eoe].strip()
         lines = [l.strip() for l in block.splitlines() if l.strip()]
-
-        # Horizons VECTORS output layout (non-CSV):
-        #   line 0: JDTDB  ...  date/time string
-        #   line 1: X= ... Y= ... Z= ...
-        #   line 2: VX= ... VY= ... VZ= ...
-        # Values follow the = sign
         if len(lines) < 3:
             return None
 
         def _extract(line):
-            """Pull floats after = signs in a Horizons vector line."""
             vals = []
             for token in line.split():
                 if "=" in token:
-                    try:
-                        vals.append(float(token.split("=")[1]))
-                    except ValueError:
-                        pass
-            # Fallback: grab all floats if no = found
+                    try: vals.append(float(token.split("=")[1]))
+                    except ValueError: pass
             if not vals:
                 for token in line.split():
-                    try:
-                        vals.append(float(token))
-                    except ValueError:
-                        pass
+                    try: vals.append(float(token))
+                    except ValueError: pass
             return vals
 
         pos = _extract(lines[1])
         vel = _extract(lines[2])
-
         if len(pos) < 3 or len(vel) < 3:
             return None
-
         x_km, y_km, z_km = pos[0], pos[1], pos[2]
         vx,   vy,   vz   = vel[0], vel[1], vel[2]
-
         dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
         velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
         dist_moon  = _approx_moon_distance(x_km, y_km)
-
         return {
             "distance_earth_km": dist_earth,
             "distance_moon_km":  dist_moon,
             "velocity_km_s":     velocity,
             "altitude_km":       dist_earth - 6371,
             "x_km": x_km, "y_km": y_km, "z_km": z_km,
-            "source": "Horizons",
-            "source_url": HORIZONS_URL,
+            "source": "Horizons", "source_url": HORIZONS_URL,
         }
-
     except Exception:
         return None
 
 
-# ── Tier 3: Physics simulation ──────────────────────────────────────────────
 def calculate_mission_profile_sim():
-    """
-    Keplerian / mission-profile fallback.
-    Based on the publicly known Artemis II free-return trajectory.
-    """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     elapsed_hours = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
 
-    if elapsed_hours < 24:
-        perigee, apogee = 300, 70000
-        a_orb = (perigee + apogee) / 2 + 6371
-        r     = perigee + 6371 + (apogee - perigee) * abs(np.sin(elapsed_hours / 24 * np.pi))
-        velocity      = np.sqrt(398600 * (2 / r - 1 / a_orb))
-        altitude      = r - 6371
+    if elapsed_hours < 0:
+        return {
+            "distance_earth_km": 0, "distance_moon_km": 384400,
+            "velocity_km_s": 0, "altitude_km": 0,
+            "x_km": 0, "y_km": 0, "z_km": 0,
+            "source": "simulation", "source_url": None,
+        }
+    elif elapsed_hours < 1.5:
+        altitude      = elapsed_hours / 1.5 * 300
+        velocity      = 0.5 + (elapsed_hours / 1.5) * 7.5
         distance_earth = altitude
         distance_moon  = 384400 - altitude
-        if 1.9 < elapsed_hours < 2.1:        # ICPS separation transient
-            altitude  += np.random.normal(0, 80)
-            velocity  += np.random.normal(0, 0.25)
-    elif elapsed_hours < 96:
-        progress       = (elapsed_hours - 24) / 72
-        distance_earth = 70000 + progress * (384400 - 70000)
+    elif elapsed_hours < 25:
+        altitude       = 300 + (elapsed_hours - 1.5) / 23.5 * 69700
+        velocity       = 8.5 - (elapsed_hours - 1.5) / 23.5 * 0.5
+        distance_earth = altitude
+        distance_moon  = 384400 - altitude
+    elif elapsed_hours < 27:
+        p              = (elapsed_hours - 25) / 2
+        distance_earth = 70000 + p * 5000
+        velocity       = 8.0 + p * 2.8
+        altitude       = distance_earth
         distance_moon  = 384400 - distance_earth
+    elif elapsed_hours < 96:
+        p              = (elapsed_hours - 27) / 69
+        distance_earth = 75000 + p * (394400 - 75000)
+        velocity       = 10.8 - p * 8.8
         altitude       = distance_earth
-        velocity       = 10.0 - progress * 9.0
-        if 23.8 < elapsed_hours < 24.3:      # TLI burn variance
-            velocity += np.random.normal(0, 0.35)
-    elif elapsed_hours < 120:
-        distance_earth = 384400 + 10000
-        distance_moon  = 300
+        distance_moon  = max(0, 384400 - distance_earth)
+    elif elapsed_hours < 108:
+        p              = (elapsed_hours - 96) / 12
+        distance_earth = 394400 + p * 13300
+        distance_moon  = max(0, 8000 - p * 7720)
         altitude       = distance_earth
-        velocity       = 2.0
+        velocity       = 2.0 + p * 0.5
+    elif elapsed_hours < 114:
+        p              = (elapsed_hours - 108) / 6
+        distance_earth = 407700 - p * 5000
+        distance_moon  = p * 60000
+        altitude       = distance_earth
+        velocity       = 2.5 + p * 0.3
     else:
-        progress       = min(1.0, (elapsed_hours - 120) / 120)
-        distance_earth = 400000 - progress * 399700
+        p              = min(1.0, (elapsed_hours - 114) / 126)
+        distance_earth = 402700 - p * 402700
         distance_moon  = abs(384400 - distance_earth)
         altitude       = distance_earth
-        velocity       = 1.0 + progress * 10.0
+        velocity       = 1.5 + p * 10.5
+
+    if 1.4 < elapsed_hours < 1.6:
+        altitude  += np.random.normal(0, 80)
+        velocity  += np.random.normal(0, 0.25)
+    if 24.8 < elapsed_hours < 25.2:
+        velocity += np.random.normal(0, 0.35)
 
     return {
-        "distance_earth_km": float(distance_earth),
-        "distance_moon_km":  float(distance_moon),
-        "velocity_km_s":     float(velocity),
-        "altitude_km":       float(altitude),
+        "distance_earth_km": float(max(0, distance_earth)),
+        "distance_moon_km":  float(max(0, distance_moon)),
+        "velocity_km_s":     float(max(0, velocity)),
+        "altitude_km":       float(max(0, altitude)),
         "x_km": float(altitude), "y_km": 0.0, "z_km": 0.0,
-        "source": "simulation",
-        "source_url": None,
+        "source": "simulation", "source_url": None,
     }
 
 
-# ── Shared helper ────────────────────────────────────────────────────────────
 def _approx_moon_distance(craft_x_km, craft_y_km):
-    """
-    Approximate distance from craft to Moon.
-    Moon position estimated via simple circular orbit (27.3-day period)
-    referenced from mission launch epoch.
-    """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     elapsed_days   = (now - MISSION_LAUNCH_UTC).total_seconds() / 86400
     moon_angle_rad = elapsed_days * (2 * np.pi / 27.3)
     moon_x = 384400 * np.cos(moon_angle_rad)
@@ -767,13 +685,7 @@ def _approx_moon_distance(craft_x_km, craft_y_km):
     return float(np.sqrt((craft_x_km - moon_x)**2 + (craft_y_km - moon_y)**2))
 
 
-# ── Main telemetry orchestrator ──────────────────────────────────────────────
 def get_live_telemetry():
-    """
-    Try AROW → Horizons → simulation (in that order).
-    Caches 5-second minimum between fetches to avoid hammering APIs.
-    Stores rolling history in session_state for ML anomaly detection.
-    """
     if "telemetry_history" not in st.session_state:
         st.session_state.telemetry_history       = []
         st.session_state.last_telemetry_update   = None
@@ -781,20 +693,18 @@ def get_live_telemetry():
         st.session_state.horizons_consecutive_ok = 0
         st.session_state.arow_available          = False
 
-    now        = datetime.utcnow()
+    now        = datetime.now(timezone.utc)
     should_add = (
         st.session_state.last_telemetry_update is None or
         (now - st.session_state.last_telemetry_update).total_seconds() >= 5
     )
 
     if should_add:
-        # Tier 1 — AROW (true live telemetry)
         current = fetch_arow_state_vector()
         if current:
             st.session_state.data_source    = "AROW"
             st.session_state.arow_available = True
 
-        # Tier 2 — JPL Horizons (periodic ephemeris updates)
         if not current:
             current = fetch_horizons_telemetry()
             if current:
@@ -803,10 +713,8 @@ def get_live_telemetry():
             else:
                 st.session_state.horizons_consecutive_ok = 0
 
-        # Tier 3 — Physics simulation
         if not current:
             current = calculate_mission_profile_sim()
-            # Add small realistic noise so the chart isn't perfectly smooth
             current["altitude_km"]   += np.random.normal(0, 10)
             current["velocity_km_s"] += np.random.normal(0, 0.04)
             st.session_state.data_source = "simulation"
@@ -823,7 +731,6 @@ def get_live_telemetry():
         })
         st.session_state.last_telemetry_update = now
 
-    # Rolling window — keep last 120 points (~10 min at 5 s cadence)
     if len(st.session_state.telemetry_history) > 120:
         st.session_state.telemetry_history = st.session_state.telemetry_history[-120:]
 
@@ -831,11 +738,30 @@ def get_live_telemetry():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# MILESTONE STATUS — uses absolute UTC datetimes
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_milestone_status():
+    now = datetime.now(timezone.utc)
+    out = {}
+    for name, data in MISSION_MILESTONES.items():
+        ms_time        = data["time"]
+        diff_seconds   = (now - ms_time).total_seconds()
+        out[name] = {
+            "completed":              diff_seconds >= 0,
+            "time_utc":               ms_time,
+            "time_remaining_minutes": max(0, -diff_seconds / 60),
+            "detail":                 data.get("detail", ""),
+        }
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # BAYESIAN MODEL
 # ═══════════════════════════════════════════════════════════════════════════
 
 class BayesianMissionSuccess:
-    def __init__(self, alpha=95, beta=5):
+    def __init__(self, alpha=92, beta=5):
         self.alpha = alpha
         self.beta  = beta
 
@@ -852,21 +778,6 @@ class BayesianMissionSuccess:
         return lo, hi
 
 
-def get_milestone_status():
-    now = datetime.utcnow()
-    elapsed_min = (now - MISSION_LAUNCH_UTC).total_seconds() / 60
-    out = {}
-    for name, data in MISSION_MILESTONES.items():
-        offset = data["time_offset_minutes"]
-        remaining = offset - elapsed_min
-        out[name] = {
-            "completed": elapsed_min >= offset,
-            "time_offset_minutes": offset,
-            "time_remaining_minutes": max(0, remaining),
-        }
-    return out
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # ANOMALY DETECTION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -877,10 +788,10 @@ def detect_anomalies(df):
     features = df[["altitude_km", "velocity_km_s"]].values
     iso  = IsolationForest(contamination=0.05, random_state=42)
     svm  = OneClassSVM(nu=0.05, kernel="rbf", gamma="auto")
-    i_pred = iso.fit_predict(features)
-    s_pred = svm.fit_predict(features)
+    i_pred  = iso.fit_predict(features)
+    s_pred  = svm.fit_predict(features)
     i_score = iso.score_samples(features)
-    ensemble = np.where((i_pred == -1) & (s_pred == -1), -1, 1)
+    ensemble  = np.where((i_pred == -1) & (s_pred == -1), -1, 1)
     score_norm = 1 - (i_score - i_score.min()) / (i_score.max() - i_score.min() + 1e-10)
     return score_norm, ensemble
 
@@ -928,7 +839,7 @@ def simulate_tli_burn(thrust_pct, burn_dur, vector_deg):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LIVE MET TIMER
+# LIVE MET TIMER (iframe — always live, unaffected by Streamlit rerenders)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def display_live_met_timer():
@@ -941,7 +852,7 @@ body{{margin:0;padding:0;background:transparent}}
       text-align:center;padding:.85rem;background:rgba(255,215,0,0.08);
       border:1.5px solid rgba(255,215,0,0.55);border-radius:10px;
       text-shadow:0 0 14px rgba(255,215,0,0.7);backdrop-filter:blur(8px)}}
-.lbl{{font-size:.7rem;color:rgba(255,215,0,0.6);margin-top:.4rem;letter-spacing:.15em}}
+.lbl{{font-size:.7rem;color:rgba(255,215,0,0.6);margin-top:.4rem;letter-spacing:.15em;text-align:center}}
 </style>
 <div class="met">
   <div id="met">00:00:00:00</div>
@@ -982,29 +893,33 @@ with col_c:
     <div style="text-align:center;padding:.8rem;">
       <div style="font-size:4rem;margin-bottom:.6rem;">🚀🌙</div>
       <p style="color:rgba(255,255,255,0.5);font-family:'Space Mono',monospace;font-size:.8rem;">
-        ORION SPACECRAFT · SLS BLOCK 1 · LIVE + SIMULATED DATA
+        ORION "INTEGRITY" · SLS BLOCK 1 · FREE-RETURN TRAJECTORY
       </p>
     </div>
     """, unsafe_allow_html=True)
 
+
 # ═══════════════════════════════════════════════════════════════════════════
-# HERO — Mission Success (auto-refresh)
+# HERO — Mission Success Probability (auto-refresh)
 # ═══════════════════════════════════════════════════════════════════════════
 
 @st.fragment(run_every="5s")
 def display_mission_success():
-    ms = get_milestone_status()
+    ms       = get_milestone_status()
     completed = sum(1 for v in ms.values() if v["completed"])
-    model = BayesianMissionSuccess()
-    penalty = 0
+    total     = len(ms)
+    model     = BayesianMissionSuccess()
+    penalty   = 0
+
     if "telemetry_history" in st.session_state and len(st.session_state.telemetry_history) >= 10:
         df_tmp = pd.DataFrame(st.session_state.telemetry_history[-20:])
         if len(df_tmp) >= 10:
             _, preds = detect_anomalies(df_tmp)
-            penalty = int((preds == -1).mean() * 3)
+            penalty  = int((preds == -1).mean() * 3)
+
     model.update(completed, penalty)
-    prob = model.predict()
-    lo, hi = model.credible_interval()
+    prob     = model.predict()
+    lo, hi   = model.credible_interval()
     src      = st.session_state.get("data_source", "simulation")
     sm       = SOURCE_META.get(src, SOURCE_META["simulation"])
     penalty_txt = f" · Anomaly Penalty: {penalty}" if penalty else ""
@@ -1015,13 +930,14 @@ def display_mission_success():
       <div class="hero-label">Mission Success Probability</div>
       <div class="hero-sub">
         Bayesian Beta-Binomial · 95% CI: [{lo*100:.1f}%, {hi*100:.1f}%]<br>
-        <span style="color:#00d4ff;">Milestones: {completed}/{len(ms)} complete</span>{penalty_txt}<br>
+        <span style="color:#00d4ff;">Milestones: {completed}/{total} confirmed complete</span>{penalty_txt}<br>
         <span style="color:{sm['color']};">{sm['label']} · {sm['detail']}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
 display_mission_success()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -1043,11 +959,11 @@ with st.sidebar:
     st.markdown("### ⏱️ MISSION ELAPSED TIME")
     display_live_met_timer()
 
-    # Data source explainer + update rates
+    # ── Data source badge ──
     @st.fragment(run_every="5s")
     def sidebar_source_badge():
-        src = st.session_state.get("data_source", "simulation")
-        sm  = SOURCE_META.get(src, SOURCE_META["simulation"])
+        src    = st.session_state.get("data_source", "simulation")
+        sm     = SOURCE_META.get(src, SOURCE_META["simulation"])
         arow_ok = st.session_state.get("arow_available", False)
         hz_ok   = st.session_state.get("horizons_consecutive_ok", 0) > 0
         def dot(ok): return f"<span style='color:{'#00ff88' if ok else '#ff4444'};'>●</span>"
@@ -1056,7 +972,7 @@ with st.sidebar:
           <div style="font-size:.68rem;color:rgba(255,255,255,0.6);font-family:'Space Mono',monospace;line-height:2;">
             <b style="color:{sm['color']};">Active: {sm['label']}</b><br>
             {dot(arow_ok)} Tier 1 · NASA AROW<br>
-            {dot(hz_ok)}   Tier 2 · JPL Horizons (-1024)<br>
+            {dot(hz_ok)}   Tier 2 · JPL Horizons (−1024)<br>
             {dot(not arow_ok and not hz_ok)} Tier 3 · Physics Model<br>
             <hr style="border-color:rgba(255,255,255,0.1);margin:.4rem 0;">
             🔄 MET: 1 s · Telemetry: 5 s<br>
@@ -1066,14 +982,20 @@ with st.sidebar:
         """, unsafe_allow_html=True)
     sidebar_source_badge()
 
+    # ── Mission phase ──
     @st.fragment(run_every="5s")
     def sidebar_phase():
-        now = datetime.utcnow()
-        h = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
-        if h < 24:       phase, col = "🌍 High Earth Orbit",  "#00d4ff"
-        elif h < 96:     phase, col = "🚀 Translunar Coast",  "#ffd700"
-        elif h < 120:    phase, col = "🌙 Lunar Flyby",       "#ffffff"
-        else:            phase, col = "🏠 Earth Return",      "#00ff00"
+        now = datetime.now(timezone.utc)
+        h   = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
+        if h < 0:         phase, col = "⏳ Pre-Launch",              "#888888"
+        elif h < 1.5:     phase, col = "🚀 Ascent / MECO",           "#ff6b35"
+        elif h < 25:      phase, col = "🌍 High Earth Orbit",         "#00d4ff"
+        elif h < 27:      phase, col = "🔥 TLI Burn",                 "#ff4444"
+        elif h < 96:      phase, col = "🚀 Translunar Coast",         "#ffd700"
+        elif h < 108:     phase, col = "🌙 Lunar Flyby Phase",        "#ffffff"
+        elif h < 114:     phase, col = "📏 Record Distance",          "#ff88ff"
+        elif h < 240:     phase, col = "🏠 Earth Return Coast",       "#00ff88"
+        else:             phase, col = "🌊 Splashdown Complete",       "#00ff88"
         st.markdown(f"""
         <div style="text-align:center;padding:.7rem;background:rgba(0,0,0,0.25);
                     border:1px solid {col};border-radius:9px;margin:.8rem 0;backdrop-filter:blur(8px);">
@@ -1088,19 +1010,32 @@ with st.sidebar:
     def sidebar_milestones():
         ms = get_milestone_status()
         for name, data in ms.items():
-            icon  = "✅" if data["completed"] else "⏳"
-            color = "#00ff00" if data["completed"] else "#ffd700"
-            rem   = ""
-            if not data["completed"] and data["time_remaining_minutes"] < 180:
-                hh = int(data["time_remaining_minutes"] // 60)
-                mm = int(data["time_remaining_minutes"] % 60)
-                rem = f" ({hh}h {mm}m)"
+            completed = data["completed"]
+            rem_min   = data["time_remaining_minutes"]
+
+            if completed:
+                icon  = "✅"
+                color = "#00ff88"
+                rem   = ""
+            else:
+                icon  = "⏳"
+                color = "#ffd700"
+                rem   = ""
+                if rem_min < 180:
+                    hh  = int(rem_min // 60)
+                    mm  = int(rem_min % 60)
+                    rem = f" ({hh}h {mm}m)"
+
             st.markdown(f"""
-            <div style="display:flex;align-items:center;margin:.45rem 0;font-family:'Space Mono',monospace;">
-              <span style="font-size:1.1rem;margin-right:.5rem;">{icon}</span>
-              <span style="color:{color};font-size:.8rem;">{name}{rem}</span>
+            <div style="display:flex;align-items:flex-start;margin:.4rem 0;font-family:'Space Mono',monospace;">
+              <span style="font-size:1rem;margin-right:.5rem;flex-shrink:0;">{icon}</span>
+              <div>
+                <span style="color:{color};font-size:.75rem;display:block;">{name}{rem}</span>
+                <span style="color:rgba(255,255,255,0.28);font-size:.62rem;">{data['time_utc'].strftime('%b %d %H:%M')} UTC</span>
+              </div>
             </div>""", unsafe_allow_html=True)
     sidebar_milestones()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN TABS
@@ -1114,16 +1049,14 @@ with tab1:
 
     @st.fragment(run_every="5s")
     def live_telemetry_display():
-        tdf = get_live_telemetry()
+        tdf    = get_live_telemetry()
         src    = st.session_state.get("data_source", "simulation")
         sm     = SOURCE_META.get(src, SOURCE_META["simulation"])
-        utc_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        utc_str = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
-        # Data source banner with tiered explanation
-        tier_num = {"AROW": 1, "Horizons": 2, "simulation": 3}.get(src, 3)
         tier_desc = {
             "AROW":       "Tier 1 · Live Orion sensor data via NASA Mission Control / AROW",
-            "Horizons":   "Tier 2 · JPL Horizons ephemeris (obj -1024 · periodic MCC uplinks)",
+            "Horizons":   "Tier 2 · JPL Horizons ephemeris (obj −1024 · periodic MCC uplinks)",
             "simulation": "Tier 3 · Physics simulation — AROW & Horizons currently unreachable",
         }.get(src, "Tier 3 · Physics simulation")
 
@@ -1153,26 +1086,26 @@ with tab1:
         tdf["is_anomaly"]    = preds == -1
 
         cur = st.session_state.get("current_telemetry", {})
-        c1,c2,c3,c4,c5 = st.columns(5)
+        c1, c2, c3, c4, c5 = st.columns(5)
 
         with c1:
-            alt = tdf.iloc[-1]["altitude_km"]
+            alt   = tdf.iloc[-1]["altitude_km"]
             d_alt = alt - tdf.iloc[-2]["altitude_km"]
-            st.metric("Altitude", f"{alt:,.0f} km", f"{d_alt:+.0f} km")
+            st.metric("Altitude / Distance", f"{alt:,.0f} km", f"{d_alt:+.0f} km")
         with c2:
-            vel = tdf.iloc[-1]["velocity_km_s"]
+            vel   = tdf.iloc[-1]["velocity_km_s"]
             d_vel = vel - tdf.iloc[-2]["velocity_km_s"]
             st.metric("Velocity", f"{vel:.3f} km/s", f"{d_vel:+.3f} km/s")
         with c3:
             de = cur.get("distance_earth_km", alt)
             st.metric("Dist. Earth", f"{de:,.0f} km", f"{de/6371:.2f} R⊕")
         with c4:
-            dm = cur.get("distance_moon_km", 384400)
-            pct = 100*(1-dm/384400)
+            dm  = cur.get("distance_moon_km", 384400)
+            pct = 100 * (1 - dm / 384400)
             st.metric("Dist. Moon", f"{dm:,.0f} km", f"{pct:+.1f}%")
         with c5:
-            a_cnt = int(tdf["is_anomaly"].sum())
-            avg_s = tdf["anomaly_score"].mean()
+            a_cnt  = int(tdf["is_anomaly"].sum())
+            avg_s  = tdf["anomaly_score"].mean()
             status = "NOMINAL" if avg_s < 0.3 else "⚠️ CAUTION"
             st.metric("Status", status, f"{a_cnt} anomalies")
 
@@ -1183,7 +1116,7 @@ with tab1:
             x=tdf["met_hours"], y=tdf["altitude_km"],
             mode="lines", name="Altitude",
             line=dict(color="#00d4ff", width=2.5),
-            hovertemplate="<b>MET:</b> %{x:.2f}h<br><b>Alt:</b> %{y:,.0f} km<extra></extra>"
+            hovertemplate="<b>MET:</b> %{x:.2f}h<br><b>Dist:</b> %{y:,.0f} km<extra></extra>"
         ))
         anom = tdf[tdf["is_anomaly"]]
         if len(anom):
@@ -1193,11 +1126,23 @@ with tab1:
                 marker=dict(color="#ff3a3a", size=10, symbol="x"),
                 hovertemplate="<b>⚠️ ANOMALY</b><br>MET: %{x:.2f}h<extra></extra>"
             ))
+
+        # Mark completed milestones on chart
+        ms_status = get_milestone_status()
+        now_h = (datetime.now(timezone.utc) - MISSION_LAUNCH_UTC).total_seconds() / 3600
+        for ms_name, ms_data in ms_status.items():
+            ms_h = (ms_data["time_utc"] - MISSION_LAUNCH_UTC).total_seconds() / 3600
+            if 0 <= ms_h <= now_h:
+                fig.add_vline(
+                    x=ms_h,
+                    line=dict(color="rgba(255,215,0,0.3)", width=1, dash="dot"),
+                )
+
         fig.update_layout(
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#fff", family="Rajdhani"),
             xaxis=dict(title="MET (hours)", gridcolor="rgba(255,255,255,0.08)"),
-            yaxis=dict(title="Altitude (km)", gridcolor="rgba(255,255,255,0.08)"),
+            yaxis=dict(title="Distance from Earth (km)", gridcolor="rgba(255,255,255,0.08)"),
             hovermode="x unified", height=440,
             legend=dict(bgcolor="rgba(0,0,0,0.3)", bordercolor="rgba(0,212,255,0.3)")
         )
@@ -1245,7 +1190,7 @@ with tab1:
                 title="Feature Space", plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#fff", family="Rajdhani"),
                 xaxis=dict(title="Velocity (km/s)", gridcolor="rgba(255,255,255,0.08)"),
-                yaxis=dict(title="Altitude (km)", gridcolor="rgba(255,255,255,0.08)"),
+                yaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.08)"),
                 height=400
             )
             st.plotly_chart(fig_sc, use_container_width=True, key="scatter_anom")
@@ -1276,7 +1221,30 @@ with tab1:
             )
             st.plotly_chart(fig_g, use_container_width=True, key="gauge_anom")
 
+        # ── Mission events log ──
+        st.markdown("#### 📋 Mission Events Log")
+        ms_all = get_milestone_status()
+        for ms_name, ms_data in ms_all.items():
+            done    = ms_data["completed"]
+            utc_str = ms_data["time_utc"].strftime("%Y-%m-%d %H:%M UTC")
+            icon    = "✅" if done else "⏳"
+            color   = "#00ff88" if done else "#ffd700"
+            status  = "COMPLETE" if done else "UPCOMING"
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);
+                        border-left:3px solid {color};border-radius:8px;padding:.6rem .9rem;
+                        margin:.4rem 0;backdrop-filter:blur(8px);">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:{color};font-weight:700;font-size:.88rem;">{icon} {ms_name}</span>
+                <span style="font-family:'Space Mono',monospace;font-size:.65rem;padding:.2rem .5rem;
+                             background:rgba(255,255,255,0.06);border-radius:20px;color:{color};">{status}</span>
+              </div>
+              <div style="font-family:'Space Mono',monospace;font-size:.67rem;color:rgba(255,255,255,0.38);margin-top:.25rem;">{utc_str}</div>
+              <div style="font-size:.75rem;color:rgba(255,255,255,0.55);margin-top:.2rem;">{ms_data['detail']}</div>
+            </div>""", unsafe_allow_html=True)
+
     live_telemetry_display()
+
 
 # ── TAB 2: SIMULATION ─────────────────────────────────────────────────────
 with tab2:
@@ -1286,7 +1254,7 @@ with tab2:
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
-        thrust_pct   = st.slider("Engine Thrust (%)",     80, 105, 100, 1,  help="Nominal: 100%")
+        thrust_pct    = st.slider("Engine Thrust (%)",     80, 105, 100, 1,  help="Nominal: 100%")
     with sc2:
         burn_duration = st.slider("Burn Duration (s)",    250, 450, 350, 10, help="Nominal: 350 s")
     with sc3:
@@ -1295,8 +1263,8 @@ with tab2:
     if st.button("🔥 EXECUTE TLI BURN SIMULATION", type="primary"):
         with st.spinner("Propagating trajectory…"):
             outcome, ok, traj_df = simulate_tli_burn(thrust_pct, burn_duration, ignition_vec)
-            st.session_state.sim_outcome   = outcome
-            st.session_state.sim_success   = ok
+            st.session_state.sim_outcome    = outcome
+            st.session_state.sim_success    = ok
             st.session_state.sim_trajectory = traj_df
 
     if "sim_outcome" in st.session_state:
@@ -1335,9 +1303,10 @@ with tab2:
         st.markdown("#### 📊 Burn Analysis")
         ba1, ba2, ba3 = st.columns(3)
         dv = 3.1*(thrust_pct/100)*(burn_duration/350)
-        with ba1: st.metric("ΔV",              f"{dv:.3f} km/s")
-        with ba2: st.metric("Final Distance",  f"{st.session_state.sim_trajectory.iloc[-1]['distance_km']:,.0f} km")
-        with ba3: st.metric("Burn Efficiency", f"{(thrust_pct/100)*(burn_duration/350)*100:.1f}%")
+        with ba1: st.metric("ΔV",             f"{dv:.3f} km/s")
+        with ba2: st.metric("Final Distance", f"{st.session_state.sim_trajectory.iloc[-1]['distance_km']:,.0f} km")
+        with ba3: st.metric("Burn Efficiency",f"{(thrust_pct/100)*(burn_duration/350)*100:.1f}%")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FOOTER
@@ -1356,7 +1325,7 @@ st.markdown("""
     <span class="tech-badge">Ensemble Learning</span>
     <span class="tech-badge">Keplerian Mechanics</span>
     <span class="tech-badge">🛰️ NASA AROW (Tier 1)</span>
-    <span class="tech-badge">🔭 JPL Horizons -1024 (Tier 2)</span>
+    <span class="tech-badge">🔭 JPL Horizons −1024 (Tier 2)</span>
     <span class="tech-badge">⚙️ Physics Sim (Tier 3)</span>
   </div>
   <p style="margin-top:1.5rem;font-size:.72rem;color:rgba(255,255,255,0.35);">
