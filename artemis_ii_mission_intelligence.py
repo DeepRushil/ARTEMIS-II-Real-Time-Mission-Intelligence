@@ -567,24 +567,21 @@ def display_live_met_timer():
     """Display JavaScript-based MET timer using Streamlit components for reliable execution"""
     launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
     
-    html_code = '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
-            
-            body {
-                margin: 0;
-                padding: 0;
-                background: transparent;
-            }
-            
-            .met-display {
-                font-family: 'Space Mono', monospace;
-                font-size: 2rem;
-                font-weight: 700;
-                color: #ffd700;
-                text-align: center;
-                padding: 1rem;
-                background: rgba(255,215,0
+    # Build HTML without quote conflicts
+    html_parts = [
+        '<!DOCTYPE html>',
+        '<html>',
+        '<head>',
+        '<style>',
+        '@import url(https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap);',
+        'body { margin: 0; padding: 0; background: transparent; }',
+        '.met-display {',
+        '  font-family: "Space Mono", monospace;',
+        '  font-size: 2rem;',
+        '  font-weight: 700;',
+        '  color: #ffd700;',
+        '  text-align: center;',
+        '  padding: 1rem;',
+        '  background: rgba(255,215,0,0.1);',
+        '  border: 2px solid #ffd700;',
+ 
