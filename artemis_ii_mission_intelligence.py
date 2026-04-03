@@ -567,21 +567,575 @@ def display_live_met_timer():
     """Display JavaScript-based MET timer using Streamlit components for reliable execution"""
     launch_timestamp_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
     
-    # Build HTML without quote conflicts
-    html_parts = [
-        '<!DOCTYPE html>',
-        '<html>',
-        '<head>',
-        '<style>',
-        '@import url(https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap);',
-        'body { margin: 0; padding: 0; background: transparent; }',
-        '.met-display {',
-        '  font-family: "Space Mono", monospace;',
-        '  font-size: 2rem;',
-        '  font-weight: 700;',
-        '  color: #ffd700;',
-        '  text-align: center;',
-        '  padding: 1rem;',
-        '  background: rgba(255,215,0,0.1);',
-        '  border: 2px solid #ffd700;',
- 
+    # Build HTML using template
+    html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+@import url(https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap);
+body {{margin:0;padding:0;background:transparent}}
+.met-display {{
+    font-family:"Space Mono",monospace;
+    font-size:2rem;
+    font-weight:700;
+    color:#ffd700;
+    text-align:center;
+    padding:1rem;
+    background:rgba(255,215,0,0.1);
+    border:2px solid #ffd700;
+    border-radius:10px;
+    text-shadow:0 0 15px rgba(255,215,0,0.5)
+}}
+.met-label {{font-size:0.8rem;color:rgba(255,215,0,0.7);margin-top:0.5rem}}
+</style>
+</head>
+<body>
+<div class="met-display">
+<div id="met-value">00:00:00:00</div>
+<div class="met-label">DAYS : HOURS : MINS : SECS</div>
+</div>
+<script>
+function updateMET(){{
+const launchTime={timestamp};
+const now=Date.now();
+const elapsed=Math.max(0,now-launchTime);
+const days=Math.floor(elapsed/(1000*60*60*24));
+const hours=Math.floor((elapsed%(1000*60*60*24))/(1000*60*60));
+const minutes=Math.floor((elapsed%(1000*60*60))/(1000*60));
+const seconds=Math.floor((elapsed%(1000*60))/1000);
+const metString=String(days).padStart(2,'0')+':'+String(hours).padStart(2,'0')+':'+String(minutes).padStart(2,'0')+':'+String(seconds).padStart(2,'0');
+document.getElementById('met-value').textContent=metString;
+}}
+updateMET();
+setInterval(updateMET,1000);
+</script>
+</body>
+</html>
+""".format(timestamp=launch_timestamp_ms)
+    
+    components.html(html_template, height=120)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HEADER & MISSION BRANDING
+# ═══════════════════════════════════════════════════════════════════════════
+
+st.markdown("""
+<div class="mission-header">
+    <h1 class="mission-title">ARTEMIS II</h1>
+    <p class="mission-subtitle">Real-Time Mission Intelligence</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Mission patch and spacecraft imagery
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.markdown("""
+    <div style="text-align: center; padding: 1rem;">
+        <div style="font-size: 5rem; margin-bottom: 1rem;">🚀🌙</div>
+        <p style="color: rgba(255,255,255,0.6); font-family: 'Space Mono', monospace; font-size: 0.9rem;">
+            ORION SPACECRAFT (INTEGRITY) • SLS BLOCK 1
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Hero Metric - Mission Success Prediction (Dynamic)
+@st.fragment(run_every="10s")
+def display_mission_success():
+    """Display dynamically updating mission success prediction"""
+    # Update Bayesian model with latest milestone completions
+    milestone_status = get_milestone_status()
+    completed_count = sum(1 for m in milestone_status.values() if m['completed'])
+    
+    # Reinitialize with updated counts
+    bayesian_model = BayesianMissionSuccess()
+    bayesian_model.update(successes=completed_count, failures=0)
+    
+    success_prob = bayesian_model.get_prediction()
+    lower_ci, upper_ci = bayesian_model.get_credible_interval()
+    
+    st.markdown(f"""
+    <div class="hero-metric">
+        <div class="hero-value">{success_prob*100:.1f}%</div>
+        <div class="hero-label">Live Mission Success Prediction</div>
+        <p style="color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-top: 1rem; font-family: 'Space Mono', monospace;">
+            Bayesian Beta-Binomial Model • 95% CI: [{lower_ci*100:.1f}%, {upper_ci*100:.1f}%]<br>
+            <span style="color: #00d4ff;">Completed Milestones: {completed_count}/{len(milestone_status)}</span>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+display_mission_success()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SIDEBAR: CREW & MISSION STATUS
+# ═══════════════════════════════════════════════════════════════════════════
+
+with st.sidebar:
+    st.markdown("### 👥 CREW MANIFEST")
+    
+    for crew in CREW_DATA:
+        st.markdown(f"""
+        <a href="{crew['url']}" target="_blank" class="crew-card">
+            <div style="font-size: 2.5rem; text-align: center; margin-bottom: 0.5rem;">{crew['emoji']}</div>
+            <div class="crew-name">{crew['name']}</div>
+            <div class="crew-role">{crew['role']}</div>
+            <div class="crew-bio">{crew['bio']}</div>
+        </a>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("### ⏱️ MISSION ELAPSED TIME")
+    
+    # Live MET counter (JavaScript-based, client-side updates)
+    display_live_met_timer()
+    
+    # Current mission phase
+    @st.fragment(run_every="10s")
+    def display_mission_phase():
+        """Display current mission phase"""
+        current_time = datetime.utcnow()
+        elapsed = current_time - MISSION_LAUNCH_UTC
+        elapsed_hours = elapsed.total_seconds() / 3600
+        
+        if elapsed_hours < 24:
+            phase = "🌍 High Earth Orbit"
+            phase_color = "#00d4ff"
+        elif elapsed_hours < 96:
+            phase = "🚀 Translunar Coast"
+            phase_color = "#ffd700"
+        elif elapsed_hours < 120:
+            phase = "🌙 Lunar Flyby"
+            phase_color = "#ffffff"
+        else:
+            phase = "🏠 Earth Return"
+            phase_color = "#00ff00"
+        
+        st.markdown(f"""
+        <div style="text-align: center; padding: 0.8rem; background: rgba(0,0,0,0.3); 
+                    border: 1px solid {phase_color}; border-radius: 8px; margin: 1rem 0;">
+            <div style="color: {phase_color}; font-family: 'Space Mono', monospace; 
+                        font-size: 0.9rem; font-weight: 600;">
+                {phase}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    display_mission_phase()
+    
+    st.markdown("---")
+    st.markdown("### 🎯 MILESTONE STATUS")
+    
+    # Use fragment for auto-updating milestones
+    @st.fragment(run_every="10s")
+    def display_milestones():
+        """Display dynamically updating milestone status"""
+        milestone_status = get_milestone_status()
+        
+        for milestone, data in milestone_status.items():
+            status_icon = "✅" if data['completed'] else "⏳"
+            status_color = "#00ff00" if data['completed'] else "#ffd700"
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; margin: 0.5rem 0; font-family: 'Space Mono', monospace;">
+                <span style="font-size: 1.2rem; margin-right: 0.5rem;">{status_icon}</span>
+                <span style="color: {status_color}; font-size: 0.85rem;">{milestone}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    display_milestones()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN DASHBOARD: DUAL-TAB ARCHITECTURE
+# ═══════════════════════════════════════════════════════════════════════════
+
+tab1, tab2 = st.tabs(["📡 Live Mission Feed", "🧪 Strategic Simulation"])
+
+# ───────────────────────────────────────────────────────────────────────────
+# TAB 1: LIVE MISSION FEED (AUTO-REFRESHING)
+# ───────────────────────────────────────────────────────────────────────────
+
+with tab1:
+    st.markdown("### 📊 Real-Time Telemetry Analysis")
+    
+    # Use fragment for auto-refreshing content without full page reload
+    @st.fragment(run_every="1s")
+    def live_telemetry_display():
+        """Fragment that auto-refreshes every 1 second for real-time updates"""
+        
+        # Display data source
+        current_utc = datetime.utcnow().strftime("%H:%M:%S UTC")
+        if 'current_telemetry' in st.session_state:
+            source = st.session_state.current_telemetry.get('source', 'calculated_profile')
+            if source == 'calculated_profile':
+                st.info(f"⚙️ **Data Source**: Mission profile calculations • Real-time updates: 1s • Last update: {current_utc}")
+        
+        # Fetch telemetry
+        telemetry_df = get_live_telemetry()
+        
+        # Anomaly detection
+        anomaly_scores, anomaly_predictions = detect_anomalies(telemetry_df)
+        telemetry_df['anomaly_score'] = anomaly_scores
+        telemetry_df['is_anomaly'] = anomaly_predictions == -1
+        
+        # Display metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        # Get current real-time data
+        current_data = st.session_state.get('current_telemetry', {})
+        
+        with col1:
+            current_altitude = telemetry_df.iloc[-1]['altitude_km']
+            st.metric(
+                "Current Altitude",
+                f"{current_altitude:,.0f} km",
+                delta=f"+{telemetry_df.iloc[-1]['altitude_km'] - telemetry_df.iloc[-2]['altitude_km']:.0f} km"
+            )
+        
+        with col2:
+            current_velocity = telemetry_df.iloc[-1]['velocity_km_s']
+            st.metric(
+                "Current Velocity",
+                f"{current_velocity:.2f} km/s",
+                delta=f"{telemetry_df.iloc[-1]['velocity_km_s'] - telemetry_df.iloc[-2]['velocity_km_s']:.3f} km/s"
+            )
+        
+        with col3:
+            distance_earth = current_data.get('distance_earth_km', current_altitude)
+            st.metric(
+                "Distance from Earth",
+                f"{distance_earth:,.0f} km",
+                delta=f"{distance_earth/6371:.1f} Earth radii"
+            )
+        
+        with col4:
+            distance_moon = current_data.get('distance_moon_km', 384400 - current_altitude)
+            st.metric(
+                "Distance to Moon",
+                f"{distance_moon:,.0f} km",
+                delta=f"{100 * (1 - distance_moon/384400):.1f}% closer"
+            )
+        
+        with col5:
+            anomaly_count = telemetry_df['is_anomaly'].sum()
+            anomaly_pct = (anomaly_count / len(telemetry_df)) * 100
+            avg_anomaly_score = telemetry_df['anomaly_score'].mean()
+            status = "NOMINAL" if avg_anomaly_score < 0.3 else "CAUTION"
+            st.metric(
+                "Flight Status",
+                status,
+                delta=f"Anomaly: {anomaly_pct:.1f}%"
+            )
+        
+        # Trajectory visualization
+        st.markdown("#### 🛰️ High Earth Orbit Trajectory")
+        
+        fig_trajectory = go.Figure()
+        
+        # Nominal trajectory
+        fig_trajectory.add_trace(go.Scatter(
+            x=telemetry_df['met_hours'],
+            y=telemetry_df['altitude_km'],
+            mode='lines',
+            name='Altitude Profile',
+            line=dict(color='#00d4ff', width=3),
+            hovertemplate='<b>MET:</b> %{x:.2f} hrs<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+        ))
+        
+        # Highlight anomalies
+        anomaly_points = telemetry_df[telemetry_df['is_anomaly']]
+        if len(anomaly_points) > 0:
+            fig_trajectory.add_trace(go.Scatter(
+                x=anomaly_points['met_hours'],
+                y=anomaly_points['altitude_km'],
+                mode='markers',
+                name='Detected Anomalies',
+                marker=dict(color='#ff0000', size=10, symbol='x'),
+                hovertemplate='<b>⚠️ ANOMALY</b><br>MET: %{x:.2f} hrs<br>Altitude: %{y:,.0f} km<extra></extra>'
+            ))
+        
+        fig_trajectory.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#ffffff', family='Rajdhani'),
+            xaxis=dict(
+                title='Mission Elapsed Time (hours)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True
+            ),
+            yaxis=dict(
+                title='Altitude (km)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True
+            ),
+            hovermode='x unified',
+            height=500
+        )
+        
+        st.plotly_chart(fig_trajectory, use_container_width=True, key=f"trajectory_{datetime.now().timestamp()}")
+        
+        # Anomaly detection gauge
+        st.markdown("#### 🔍 ML Anomaly Detection Ensemble")
+        st.markdown("*Voting ensemble: Isolation Forest + One-Class SVM*")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Velocity vs Altitude scatter
+            fig_scatter = go.Figure()
+            
+            # Normal points
+            normal_points = telemetry_df[~telemetry_df['is_anomaly']]
+            fig_scatter.add_trace(go.Scatter(
+                x=normal_points['velocity_km_s'],
+                y=normal_points['altitude_km'],
+                mode='markers',
+                name='Nominal',
+                marker=dict(
+                    color=normal_points['anomaly_score'],
+                    colorscale='Viridis',
+                    size=8,
+                    colorbar=dict(title='Anomaly<br>Score')
+                ),
+                hovertemplate='<b>Velocity:</b> %{x:.2f} km/s<br><b>Altitude:</b> %{y:,.0f} km<extra></extra>'
+            ))
+            
+            # Anomaly points
+            if len(anomaly_points) > 0:
+                fig_scatter.add_trace(go.Scatter(
+                    x=anomaly_points['velocity_km_s'],
+                    y=anomaly_points['altitude_km'],
+                    mode='markers',
+                    name='Anomaly',
+                    marker=dict(color='#ff0000', size=12, symbol='x'),
+                    hovertemplate='<b>⚠️ ANOMALY</b><br>Velocity: %{x:.2f} km/s<br>Altitude: %{y:,.0f} km<extra></extra>'
+                ))
+            
+            fig_scatter.update_layout(
+                title='Feature Space Analysis',
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#ffffff', family='Rajdhani'),
+                xaxis=dict(title='Velocity (km/s)', gridcolor='rgba(255,255,255,0.1)'),
+                yaxis=dict(title='Altitude (km)', gridcolor='rgba(255,255,255,0.1)'),
+                height=400
+            )
+            
+            st.plotly_chart(fig_scatter, use_container_width=True, key=f"scatter_{datetime.now().timestamp()}")
+        
+        with col2:
+            # Anomaly score gauge
+            current_anomaly_score = telemetry_df.iloc[-1]['anomaly_score']
+            
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=current_anomaly_score * 100,
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Current Anomaly Score", 'font': {'size': 20, 'color': '#ffffff'}},
+                delta={'reference': 30, 'increasing': {'color': '#ff0000'}, 'decreasing': {'color': '#00ff00'}},
+                gauge={
+                    'axis': {'range': [0, 100], 'tickcolor': '#ffffff'},
+                    'bar': {'color': '#00d4ff'},
+                    'bgcolor': 'rgba(0,0,0,0.3)',
+                    'borderwidth': 2,
+                    'bordercolor': '#ffffff',
+                    'steps': [
+                        {'range': [0, 30], 'color': 'rgba(0,255,0,0.2)'},
+                        {'range': [30, 70], 'color': 'rgba(255,215,0,0.2)'},
+                        {'range': [70, 100], 'color': 'rgba(255,0,0,0.2)'}
+                    ],
+                    'threshold': {
+                        'line': {'color': 'red', 'width': 4},
+                        'thickness': 0.75,
+                        'value': 70
+                    }
+                }
+            ))
+            
+            fig_gauge.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font={'color': '#ffffff', 'family': 'Rajdhani'},
+                height=400
+            )
+            
+            st.plotly_chart(fig_gauge, use_container_width=True, key=f"gauge_{datetime.now().timestamp()}")
+    
+    # Call the auto-refreshing fragment
+    live_telemetry_display()
+
+# ───────────────────────────────────────────────────────────────────────────
+# TAB 2: STRATEGIC SIMULATION (NO AUTO-REFRESH)
+# ───────────────────────────────────────────────────────────────────────────
+
+with tab2:
+    st.markdown("### 🚀 Translunar Injection (TLI) Burn Simulator")
+    st.markdown("*Physics-based orbital propagator for strategic mission planning*")
+    
+    st.markdown("---")
+    
+    # Control panel
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        thrust_pct = st.slider(
+            "Engine Thrust (%)",
+            min_value=80,
+            max_value=105,
+            value=100,
+            step=1,
+            help="Nominal: 100% | Range: 80-105%"
+        )
+    
+    with col2:
+        burn_duration = st.slider(
+            "Burn Duration (seconds)",
+            min_value=250,
+            max_value=450,
+            value=350,
+            step=10,
+            help="Nominal: 350 seconds"
+        )
+    
+    with col3:
+        ignition_vector = st.slider(
+            "Ignition Vector (degrees)",
+            min_value=0,
+            max_value=360,
+            value=90,
+            step=5,
+            help="Direction of thrust vector"
+        )
+    
+    # Run simulation button
+    if st.button("🔥 EXECUTE TLI BURN SIMULATION", type="primary"):
+        with st.spinner("Propagating orbital trajectory..."):
+            outcome, success, trajectory_df = simulate_tli_burn(
+                thrust_pct, burn_duration, ignition_vector
+            )
+            
+            st.session_state.sim_outcome = outcome
+            st.session_state.sim_success = success
+            st.session_state.sim_trajectory = trajectory_df
+    
+    # Display results
+    if 'sim_outcome' in st.session_state:
+        st.markdown("---")
+        
+        # Outcome banner
+        outcome_color = "#00ff00" if st.session_state.sim_success else "#ff0000"
+        st.markdown(f"""
+        <div style="background: rgba(0,212,255,0.1); border: 3px solid {outcome_color}; 
+                    border-radius: 15px; padding: 2rem; margin: 2rem 0; text-align: center;">
+            <h2 style="color: {outcome_color}; font-family: 'Rajdhani', sans-serif; 
+                       font-size: 2rem; margin: 0;">
+                {st.session_state.sim_outcome}
+            </h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Trajectory visualization
+        st.markdown("#### 🌍➡️🌙 Simulated Trajectory")
+        
+        fig_sim = go.Figure()
+        
+        # Earth
+        fig_sim.add_trace(go.Scatter(
+            x=[0], y=[0],
+            mode='markers+text',
+            name='Earth',
+            marker=dict(size=30, color='#00d4ff'),
+            text=['🌍'],
+            textfont=dict(size=40),
+            hovertemplate='<b>Earth</b><extra></extra>'
+        ))
+        
+        # Moon position (approximate)
+        moon_x = 384400 * np.cos(np.radians(45))
+        moon_y = 384400 * np.sin(np.radians(45))
+        fig_sim.add_trace(go.Scatter(
+            x=[moon_x], y=[moon_y],
+            mode='markers+text',
+            name='Moon',
+            marker=dict(size=20, color='#ffd700'),
+            text=['🌙'],
+            textfont=dict(size=30),
+            hovertemplate='<b>Moon</b><extra></extra>'
+        ))
+        
+        # Trajectory
+        trajectory_color = '#00ff00' if st.session_state.sim_success else '#ff0000'
+        fig_sim.add_trace(go.Scatter(
+            x=st.session_state.sim_trajectory['x_km'],
+            y=st.session_state.sim_trajectory['y_km'],
+            mode='lines',
+            name='Spacecraft Trajectory',
+            line=dict(color=trajectory_color, width=3),
+            hovertemplate='<b>Time:</b> %{customdata:.1f} hrs<br>' +
+                          '<b>Distance:</b> %{text:,.0f} km<extra></extra>',
+            customdata=st.session_state.sim_trajectory['time_hours'],
+            text=st.session_state.sim_trajectory['distance_km']
+        ))
+        
+        fig_sim.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#ffffff', family='Rajdhani'),
+            xaxis=dict(
+                title='X Position (km)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True,
+                scaleanchor="y",
+                scaleratio=1
+            ),
+            yaxis=dict(
+                title='Y Position (km)',
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True
+            ),
+            height=600,
+            hovermode='closest'
+        )
+        
+        st.plotly_chart(fig_sim, use_container_width=True)
+        
+        # Mission parameters summary
+        st.markdown("#### 📊 Burn Parameters Analysis")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            delta_v = 3.1 * (thrust_pct / 100) * (burn_duration / 350)
+            st.metric("Calculated ΔV", f"{delta_v:.3f} km/s")
+        
+        with col2:
+            final_distance = st.session_state.sim_trajectory.iloc[-1]['distance_km']
+            st.metric("Final Distance", f"{final_distance:,.0f} km")
+        
+        with col3:
+            efficiency = (thrust_pct / 100) * (burn_duration / 350) * 100
+            st.metric("Burn Efficiency", f"{efficiency:.1f}%")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FOOTER: DATA SCIENCE METHODOLOGY
+# ═══════════════════════════════════════════════════════════════════════════
+
+st.markdown("""
+<div class="tech-footer">
+    <h3 style="color: #00d4ff; font-family: 'Rajdhani', sans-serif; margin-bottom: 1rem;">
+        🔬 Data Science Methodologies Implemented
+    </h3>
+    <div>
+        <span class="tech-badge">Bayesian Inference</span>
+        <span class="tech-badge">Beta-Binomial Conjugate Priors</span>
+        <span class="tech-badge">Isolation Forest</span>
+        <span class="tech-badge">One-Class SVM</span>
+        <span class="tech-badge">Ensemble Voting</span>
+        <span class="tech-badge">Keplerian Orbital Mechanics</span>
+        <span class="tech-badge">Real-Time Anomaly Detection</span>
+        <span class="tech-badge">Physics-Based Simulation</span>
+    </div>
+    <p style="margin-top: 1.5rem; font-size: 0.75rem; color: rgba(255,255,255,0.4);">
+        Developed by Rushil | Portfolio Project | April 2026
+    </p>
+</div>
+""", unsafe_allow_html=True)
