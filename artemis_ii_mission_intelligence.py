@@ -377,7 +377,7 @@ st.markdown("""
       surf.addColorStop(0.55,'#c8ccdb');
       surf.addColorStop(1,'#898ea8');
       ctx.beginPath(); ctx.arc(mx,my,mr,0,Math.PI*2);
-      ctx.fillStyle=surf; ctx.fill();
+        ctx.fillStyle=surf; ctx.fill();
 
       craters.forEach(c=>{
         const cr=c.r*(mr/72);
@@ -489,6 +489,133 @@ SOURCE_META = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# HORIZONS QUERY HELPER — Fetches state vector for any object
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _query_horizons_vectors(command: str, center: str = "'500@399'") -> dict | None:
+    """
+    Query JPL Horizons for a state vector at the current UTC time.
+    Returns dict with x_km, y_km, z_km, vx, vy, vz or None on failure.
+    command: Horizons target, e.g. "'-1024'" for Orion, "'301'" for Moon.
+    center:  Origin frame, default geocentric Earth.
+    """
+    try:
+        now_utc  = datetime.now(timezone.utc)
+        stop_utc = now_utc + timedelta(minutes=2)
+        fmt      = "%Y-%m-%d %H:%M"
+        params = {
+            "format":     "json",
+            "COMMAND":    command,
+            "OBJ_DATA":   "NO",
+            "MAKE_EPHEM": "YES",
+            "EPHEM_TYPE": "VECTORS",
+            "CENTER":     center,
+            "START_TIME": f"'{now_utc.strftime(fmt)}'",
+            "STOP_TIME":  f"'{stop_utc.strftime(fmt)}'",
+            "STEP_SIZE":  "'1 m'",
+            "VEC_TABLE":  "3",
+            "REF_PLANE":  "FRAME",
+            "REF_SYSTEM": "J2000",
+            "OUT_UNITS":  "KM-S",
+            "CSV_FORMAT": "NO",
+        }
+        resp = requests.get(HORIZONS_URL, params=params, timeout=10)
+        if resp.status_code != 200:
+            return None
+        result_text = resp.json().get("result", "")
+        if "$$SOE" not in result_text or "$$EOE" not in result_text:
+            return None
+        soe   = result_text.index("$$SOE") + 5
+        eoe   = result_text.index("$$EOE")
+        block = result_text[soe:eoe].strip()
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 3:
+            return None
+
+        def _extract(line):
+            vals = []
+            for token in line.split():
+                if "=" in token:
+                    try:
+                        vals.append(float(token.split("=")[1]))
+                    except ValueError:
+                        pass
+            if not vals:
+                for token in line.split():
+                    try:
+                        vals.append(float(token))
+                    except ValueError:
+                        pass
+            return vals
+
+        pos = _extract(lines[1])
+        vel = _extract(lines[2])
+        if len(pos) < 3 or len(vel) < 3:
+            return None
+        return {
+            "x_km": pos[0], "y_km": pos[1], "z_km": pos[2],
+            "vx":   vel[0], "vy":   vel[1], "vz":   vel[2],
+        }
+    except Exception:
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MOON POSITION — Real-time from JPL Horizons (obj 301)
+# Cached for 5 minutes to avoid redundant API calls
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_moon_position_km() -> tuple[float, float, float]:
+    """
+    Returns (mx, my, mz) in km in the geocentric J2000 frame.
+    Falls back to a high-accuracy analytical approximation if API unavailable.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Use cached value if fresher than 5 minutes
+    cached = st.session_state.get("moon_pos_cache")
+    cache_time = st.session_state.get("moon_pos_cache_time")
+    if cached and cache_time and (now - cache_time).total_seconds() < 300:
+        return cached
+
+    sv = _query_horizons_vectors("'301'", center="'500@399'")
+    if sv:
+        pos = (sv["x_km"], sv["y_km"], sv["z_km"])
+        st.session_state.moon_pos_cache      = pos
+        st.session_state.moon_pos_cache_time = now
+        return pos
+
+    # Analytical fallback — ELP2000 simplified (good to ~0.3% in distance)
+    # Days since J2000.0
+    jd = (now - datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)).total_seconds() / 86400.0
+    L  = np.radians((218.316 + 13.176396 * jd) % 360)   # mean longitude
+    M  = np.radians((134.963 + 13.064993 * jd) % 360)   # mean anomaly
+    F  = np.radians((93.272  + 13.229350 * jd) % 360)   # argument of latitude
+    lon = L + np.radians(6.289 * np.sin(M))              # ecliptic longitude
+    lat = np.radians(5.128 * np.sin(F))                  # ecliptic latitude
+    dist = 385001 - 20905 * np.cos(M)                    # distance km
+    # Convert ecliptic → equatorial (J2000 obliquity 23.439°)
+    eps = np.radians(23.439)
+    mx  = dist * np.cos(lat) * np.cos(lon)
+    my  = dist * (np.cos(eps) * np.cos(lat) * np.sin(lon) - np.sin(eps) * np.sin(lat))
+    mz  = dist * (np.sin(eps) * np.cos(lat) * np.sin(lon) + np.cos(eps) * np.sin(lat))
+    pos = (mx, my, mz)
+    st.session_state.moon_pos_cache      = pos
+    st.session_state.moon_pos_cache_time = now
+    return pos
+
+
+def compute_dist_moon(craft_x: float, craft_y: float, craft_z: float) -> float:
+    """True 3-D distance between craft and Moon in km."""
+    mx, my, mz = get_moon_position_km()
+    return float(np.sqrt((craft_x - mx)**2 + (craft_y - my)**2 + (craft_z - mz)**2))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TIER 1: NASA AROW
+# ═══════════════════════════════════════════════════════════════════════════
+
 def fetch_arow_state_vector():
     candidate_urls = [
         "https://nasa.gov/sites/default/files/atoms/files/artemis2_state_vectors.txt",
@@ -512,12 +639,11 @@ def fetch_arow_state_vector():
             vx   = float(parts[4]); vy   = float(parts[5]); vz   = float(parts[6])
             dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
             velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
-            dist_moon  = _approx_moon_distance(x_km, y_km)
+            dist_moon  = compute_dist_moon(x_km, y_km, z_km)
             return {
                 "distance_earth_km": dist_earth,
                 "distance_moon_km":  dist_moon,
                 "velocity_km_s":     velocity,
-                "altitude_km":       dist_earth - 6371,
                 "x_km": x_km, "y_km": y_km, "z_km": z_km,
                 "source": "AROW", "source_url": url,
             }
@@ -526,196 +652,124 @@ def fetch_arow_state_vector():
     return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# TIER 2: JPL Horizons — Orion (obj −1024) + real Moon 3-D distance
+# ═══════════════════════════════════════════════════════════════════════════
+
 def fetch_horizons_telemetry():
-    try:
-        now_utc  = datetime.now(timezone.utc)
-        stop_utc = now_utc + timedelta(minutes=2)
-        fmt      = "%Y-%m-%d %H:%M"
-        params = {
-            "format":      "json",
-            "COMMAND":     "'-1024'",
-            "OBJ_DATA":    "NO",
-            "MAKE_EPHEM":  "YES",
-            "EPHEM_TYPE":  "VECTORS",
-            "CENTER":      "'500@399'",
-            "START_TIME":  f"'{now_utc.strftime(fmt)}'",
-            "STOP_TIME":   f"'{stop_utc.strftime(fmt)}'",
-            "STEP_SIZE":   "'1 m'",
-            "VEC_TABLE":   "3",
-            "REF_PLANE":   "FRAME",
-            "REF_SYSTEM":  "J2000",
-            "OUT_UNITS":   "KM-S",
-            "CSV_FORMAT":  "NO",
-        }
-        resp = requests.get(HORIZONS_URL, params=params, timeout=8)
-        if resp.status_code != 200:
-            return None
-        result_text = resp.json().get("result", "")
-        if "$$SOE" not in result_text:
-            return None
-        soe   = result_text.index("$$SOE") + 5
-        eoe   = result_text.index("$$EOE")
-        block = result_text[soe:eoe].strip()
-        lines = [l.strip() for l in block.splitlines() if l.strip()]
-        if len(lines) < 3:
-            return None
-
-        def _extract(line):
-            vals = []
-            for token in line.split():
-                if "=" in token:
-                    try: vals.append(float(token.split("=")[1]))
-                    except ValueError: pass
-            if not vals:
-                for token in line.split():
-                    try: vals.append(float(token))
-                    except ValueError: pass
-            return vals
-
-        pos = _extract(lines[1])
-        vel = _extract(lines[2])
-        if len(pos) < 3 or len(vel) < 3:
-            return None
-        x_km, y_km, z_km = pos[0], pos[1], pos[2]
-        vx,   vy,   vz   = vel[0], vel[1], vel[2]
-        dist_earth = np.sqrt(x_km**2 + y_km**2 + z_km**2)
-        velocity   = np.sqrt(vx**2 + vy**2 + vz**2)
-        dist_moon  = _approx_moon_distance(x_km, y_km)
-        return {
-            "distance_earth_km": dist_earth,
-            "distance_moon_km":  dist_moon,
-            "velocity_km_s":     velocity,
-            "altitude_km":       dist_earth - 6371,
-            "x_km": x_km, "y_km": y_km, "z_km": z_km,
-            "source": "Horizons", "source_url": HORIZONS_URL,
-        }
-    except Exception:
+    sv = _query_horizons_vectors("'-1024'", center="'500@399'")
+    if not sv:
         return None
+    x_km, y_km, z_km = sv["x_km"], sv["y_km"], sv["z_km"]
+    vx, vy, vz       = sv["vx"],   sv["vy"],   sv["vz"]
+    dist_earth = float(np.sqrt(x_km**2 + y_km**2 + z_km**2))
+    velocity   = float(np.sqrt(vx**2 + vy**2 + vz**2))
+    dist_moon  = compute_dist_moon(x_km, y_km, z_km)   # ← real 3-D distance
+    return {
+        "distance_earth_km": dist_earth,
+        "distance_moon_km":  dist_moon,
+        "velocity_km_s":     velocity,
+        "x_km": x_km, "y_km": y_km, "z_km": z_km,
+        "source": "Horizons", "source_url": HORIZONS_URL,
+    }
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TIER 3: Physics Simulation (fallback)
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _sim_state_at_hours(elapsed_hours):
-    """
-    Pure function: return (altitude_km, velocity_km_s, distance_moon_km)
-    for any elapsed_hours value within [0, MISSION_TOTAL_HOURS].
-    Phase boundaries cover the full ~212h mission.
-    """
-    # Clamp to mission window
     h = max(0.0, min(elapsed_hours, MISSION_TOTAL_HOURS))
 
     if h < 1.5:
         p   = h / 1.5
         alt = p * 300
         vel = 0.5 + p * 7.5
-        dm  = 384400 - alt
-
     elif h < 25:
         p   = (h - 1.5) / 23.5
         alt = 300 + p * 69700
         vel = 8.0 - p * 0.5
-        dm  = 384400 - alt
-
     elif h < 27:
-        # TLI burn: rapid velocity boost
         p   = (h - 25) / 2
         alt = 70000 + p * 5000
-        vel = 7.5 + p * 3.3       # 7.5 → 10.8 km/s
-        dm  = 384400 - alt
-
+        vel = 7.5 + p * 3.3
     elif h < 108:
-        # Translunar coast out: 75k → 407k km, vel 10.8 → 0.9 km/s
         p   = (h - 27) / 81
         alt = 75000 + p * (407700 - 75000)
         vel = 10.8 - p * 9.9
-        dm  = max(0, 384400 - alt + 8000 * np.sin(p * np.pi))
-
     elif h < 120:
-        # Lunar flyby
         p   = (h - 108) / 12
         alt = 407700 + p * 2000
-        dm  = max(0, 8000 * (1 - np.sin(p * np.pi)) + p * 60000)
         vel = 0.9 + p * 0.8
-
     elif h < 132:
-        # Record distance region
         p   = (h - 120) / 12
         alt = 409700 - p * 5000
-        dm  = 68000 + p * 30000
         vel = 1.7 + p * 0.5
-
     elif h < 192:
-        # Return translunar coast: 404k → 50k km, vel 2.2 → 8.0 km/s
         p   = (h - 132) / 60
         alt = 404700 - p * 354700
-        dm  = max(0, 384400 - alt)
         vel = 2.2 + p * 5.8
-
     elif h < 209:
-        # Earth approach + atmospheric entry
         p   = (h - 192) / 17
         alt = max(0, 50000 - p * 50000)
-        dm  = 384400 - alt
-        vel = 8.0 + p * 3.5       # peaks ~11.5 km/s at entry
-
+        vel = 8.0 + p * 3.5
     else:
-        # Parachute + splashdown
         p   = min(1.0, (h - 209) / 3)
         alt = max(0, (1 - p) * 400)
-        dm  = 384400
         vel = max(0, 11.5 * (1 - p))
 
-    return float(max(0, alt)), float(max(0, vel)), float(max(0, dm))
+    # Sim craft position: along X-axis at distance `alt` from Earth centre
+    craft_x = float(max(0, alt))
+    craft_y = 0.0
+    craft_z = 0.0
+    dist_moon = compute_dist_moon(craft_x, craft_y, craft_z)
+    return float(max(0, alt)), float(max(0, vel)), float(max(0, dist_moon)), craft_x, craft_y, craft_z
 
 
 def calculate_mission_profile_sim():
-    """Current-moment simulation state."""
     now = datetime.now(timezone.utc)
     elapsed_hours = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
 
     if elapsed_hours < 0:
+        dm = compute_dist_moon(0.0, 0.0, 0.0)
         return {
-            "distance_earth_km": 0, "distance_moon_km": 384400,
-            "velocity_km_s": 0, "altitude_km": 0,
+            "distance_earth_km": 0, "distance_moon_km": dm,
+            "velocity_km_s": 0,
             "x_km": 0, "y_km": 0, "z_km": 0,
             "source": "simulation", "source_url": None,
         }
 
-    alt, vel, dm = _sim_state_at_hours(elapsed_hours)
+    alt, vel, dm, cx, cy, cz = _sim_state_at_hours(elapsed_hours)
     return {
         "distance_earth_km": alt,
         "distance_moon_km":  dm,
         "velocity_km_s":     vel,
-        "altitude_km":       alt,
-        "x_km": alt, "y_km": 0.0, "z_km": 0.0,
+        "x_km": cx, "y_km": cy, "z_km": cz,
         "source": "simulation", "source_url": None,
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FULL MISSION PROFILE (backdrop for charts)
+# ═══════════════════════════════════════════════════════════════════════════
+
 def get_full_mission_profile():
-    """
-    Smooth hourly backdrop covering 0 → current MET (or full mission if complete).
-    Used as the faint dotted reference line behind live telemetry points.
-    """
     now_h = (datetime.now(timezone.utc) - MISSION_LAUNCH_UTC).total_seconds() / 3600
     end_h = min(now_h, MISSION_TOTAL_HOURS)
     if end_h <= 0:
         return pd.DataFrame(columns=["met_hours", "altitude_km", "velocity_km_s"])
     n_pts = max(3, int(end_h) + 1)
     hours = np.linspace(0, end_h, n_pts)
-    rows = []
+    rows  = []
     for h in hours:
-        alt, vel, dm = _sim_state_at_hours(h)
+        alt, vel, _, _, _, _ = _sim_state_at_hours(h)
         rows.append({"met_hours": h, "altitude_km": alt, "velocity_km_s": vel})
     return pd.DataFrame(rows)
 
 
-def _approx_moon_distance(craft_x_km, craft_y_km):
-    now = datetime.now(timezone.utc)
-    elapsed_days   = (now - MISSION_LAUNCH_UTC).total_seconds() / 86400
-    moon_angle_rad = elapsed_days * (2 * np.pi / 27.3)
-    moon_x = 384400 * np.cos(moon_angle_rad)
-    moon_y = 384400 * np.sin(moon_angle_rad)
-    return float(np.sqrt((craft_x_km - moon_x)**2 + (craft_y_km - moon_y)**2))
-
+# ═══════════════════════════════════════════════════════════════════════════
+# LIVE TELEMETRY
+# ═══════════════════════════════════════════════════════════════════════════
 
 def get_live_telemetry():
     if "telemetry_history" not in st.session_state:
@@ -747,21 +801,23 @@ def get_live_telemetry():
 
         if not current:
             current = calculate_mission_profile_sim()
-            current["altitude_km"]   += np.random.normal(0, 10)
-            current["velocity_km_s"] += np.random.normal(0, 0.04)
-            current["altitude_km"]    = max(0, current["altitude_km"])
-            current["velocity_km_s"]  = max(0, current["velocity_km_s"])
-            st.session_state.data_source = "simulation"
+            current["distance_earth_km"] += np.random.normal(0, 10)
+            current["velocity_km_s"]     += np.random.normal(0, 0.04)
+            current["distance_earth_km"]  = max(0, current["distance_earth_km"])
+            current["velocity_km_s"]      = max(0, current["velocity_km_s"])
+            st.session_state.data_source  = "simulation"
 
         st.session_state.current_telemetry = current
         elapsed_hours = (now - MISSION_LAUNCH_UTC).total_seconds() / 3600
 
         st.session_state.telemetry_history.append({
-            "timestamp":     now,
-            "altitude_km":   current["altitude_km"],
-            "velocity_km_s": current["velocity_km_s"],
-            "met_hours":     elapsed_hours,
-            "source":        current["source"],
+            "timestamp":          now,
+            "altitude_km":        current["distance_earth_km"],   # kept for chart compat
+            "velocity_km_s":      current["velocity_km_s"],
+            "distance_earth_km":  current["distance_earth_km"],
+            "distance_moon_km":   current["distance_moon_km"],
+            "met_hours":          elapsed_hours,
+            "source":             current["source"],
         })
         st.session_state.last_telemetry_update = now
 
@@ -779,8 +835,8 @@ def get_milestone_status():
     now = datetime.now(timezone.utc)
     out = {}
     for name, data in MISSION_MILESTONES.items():
-        ms_time        = data["time"]
-        diff_seconds   = (now - ms_time).total_seconds()
+        ms_time      = data["time"]
+        diff_seconds = (now - ms_time).total_seconds()
         out[name] = {
             "completed":              diff_seconds >= 0,
             "time_utc":               ms_time,
@@ -819,13 +875,13 @@ class BayesianMissionSuccess:
 def detect_anomalies(df):
     if len(df) < 10:
         return np.zeros(len(df)), np.ones(len(df))
-    features = df[["altitude_km", "velocity_km_s"]].values
-    iso  = IsolationForest(contamination=0.05, random_state=42)
-    svm  = OneClassSVM(nu=0.05, kernel="rbf", gamma="auto")
-    i_pred  = iso.fit_predict(features)
-    s_pred  = svm.fit_predict(features)
-    i_score = iso.score_samples(features)
-    ensemble  = np.where((i_pred == -1) & (s_pred == -1), -1, 1)
+    features   = df[["distance_earth_km", "velocity_km_s"]].values
+    iso        = IsolationForest(contamination=0.05, random_state=42)
+    svm        = OneClassSVM(nu=0.05, kernel="rbf", gamma="auto")
+    i_pred     = iso.fit_predict(features)
+    s_pred     = svm.fit_predict(features)
+    i_score    = iso.score_samples(features)
+    ensemble   = np.where((i_pred == -1) & (s_pred == -1), -1, 1)
     score_norm = 1 - (i_score - i_score.min()) / (i_score.max() - i_score.min() + 1e-10)
     return score_norm, ensemble
 
@@ -841,7 +897,7 @@ def simulate_tli_burn(thrust_pct, burn_dur, vector_deg):
     dv = 3.1 * (thrust_pct / 100) * (burn_dur / 350)
     v1 = v0 + dv
     v_esc = np.sqrt(2 * GM / r0)
-    n = 200
+    n  = 200
     ts = np.linspace(0, 100, n)
     traj = []
     for t in ts:
@@ -849,10 +905,10 @@ def simulate_tli_burn(thrust_pct, burn_dur, vector_deg):
             d = r0 + v1 * t * 3600
         else:
             energy = v1**2 / 2 - GM / r0
-            a = -GM / (2 * energy)
-            mm = np.sqrt(GM / a**3)
+            a   = -GM / (2 * energy)
+            mm  = np.sqrt(GM / a**3)
             ang = mm * t * 3600
-            d = a * (1 + 0.5 * np.cos(ang))
+            d   = a * (1 + 0.5 * np.cos(ang))
         traj.append({
             "time_hours": t,
             "distance_km": d,
@@ -878,7 +934,7 @@ def simulate_tli_burn(thrust_pct, burn_dur, vector_deg):
 
 def display_live_met_timer():
     ts_ms = int(MISSION_LAUNCH_UTC.timestamp() * 1000)
-    html = f"""
+    html  = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@700&display=swap');
 body{{margin:0;padding:0;background:transparent}}
@@ -1003,10 +1059,11 @@ with st.sidebar:
 
     @st.fragment(run_every="5s")
     def sidebar_source_badge():
-        src    = st.session_state.get("data_source", "simulation")
-        sm     = SOURCE_META.get(src, SOURCE_META["simulation"])
+        src     = st.session_state.get("data_source", "simulation")
+        sm      = SOURCE_META.get(src, SOURCE_META["simulation"])
         arow_ok = st.session_state.get("arow_available", False)
         hz_ok   = st.session_state.get("horizons_consecutive_ok", 0) > 0
+        moon_cached = st.session_state.get("moon_pos_cache") is not None
         def dot(ok): return f"<span style='color:{'#00ff88' if ok else '#ff4444'};'>●</span>"
         st.markdown(f"""
         <div class="glass-card" style="margin-top:.5rem;">
@@ -1015,6 +1072,7 @@ with st.sidebar:
             {dot(arow_ok)} Tier 1 · NASA AROW<br>
             {dot(hz_ok)}   Tier 2 · JPL Horizons (−1024)<br>
             {dot(not arow_ok and not hz_ok)} Tier 3 · Physics Model<br>
+            {dot(moon_cached)} Moon pos · JPL/301 (5 min cache)<br>
             <hr style="border-color:rgba(255,255,255,0.1);margin:.4rem 0;">
             🔄 MET: 1 s · Telemetry: 5 s<br>
             🔄 Milestones: 5 s · Prediction: 5 s
@@ -1123,23 +1181,31 @@ with tab1:
         tdf["is_anomaly"]    = preds == -1
 
         cur = st.session_state.get("current_telemetry", {})
-        c1, c2, c3, c4, c5 = st.columns(5)
+
+        # ── 4 metrics: Velocity | Dist. Earth | Dist. Moon | Status ─────
+        c1, c2, c3, c4 = st.columns(4)
+
         with c1:
-            alt   = tdf.iloc[-1]["altitude_km"]
-            d_alt = alt - tdf.iloc[-2]["altitude_km"]
-            st.metric("Altitude / Distance", f"{alt:,.0f} km", f"{d_alt:+.0f} km")
-        with c2:
             vel   = tdf.iloc[-1]["velocity_km_s"]
             d_vel = vel - tdf.iloc[-2]["velocity_km_s"]
-            st.metric("Velocity", f"{vel:.3f} km/s", f"{d_vel:+.3f} km/s")
+            st.metric("Velocity", f"{vel:.3f} km/s", f"{d_vel:+.4f} km/s")
+
+        with c2:
+            de   = cur.get("distance_earth_km", tdf.iloc[-1].get("distance_earth_km", 0))
+            de_prev = tdf.iloc[-2].get("distance_earth_km", de) if len(tdf) >= 2 else de
+            d_de = de - de_prev
+            st.metric("Distance from Earth", f"{de:,.0f} km", f"{d_de:+.0f} km")
+
         with c3:
-            de = cur.get("distance_earth_km", alt)
-            st.metric("Dist. Earth", f"{de:,.0f} km", f"{de/6371:.2f} R⊕")
+            dm = cur.get("distance_moon_km", tdf.iloc[-1].get("distance_moon_km", 384400))
+            dm_prev = tdf.iloc[-2].get("distance_moon_km", dm) if len(tdf) >= 2 else dm
+            d_dm = dm - dm_prev
+            # Moon distance source label
+            moon_cached = st.session_state.get("moon_pos_cache") is not None
+            moon_src    = "JPL/301" if moon_cached else "Analytical"
+            st.metric(f"Distance to Moon ({moon_src})", f"{dm:,.0f} km", f"{d_dm:+.0f} km")
+
         with c4:
-            dm  = cur.get("distance_moon_km", 384400)
-            pct = 100 * (1 - dm / 384400)
-            st.metric("Dist. Moon", f"{dm:,.0f} km", f"{pct:+.1f}%")
-        with c5:
             a_cnt  = int(tdf["is_anomaly"].sum())
             avg_s  = tdf["anomaly_score"].mean()
             status = "NOMINAL" if avg_s < 0.3 else "⚠️ CAUTION"
@@ -1151,7 +1217,6 @@ with tab1:
 
         fig = go.Figure()
 
-        # Faint full-mission backdrop
         if len(profile_df) >= 2:
             fig.add_trace(go.Scatter(
                 x=profile_df["met_hours"], y=profile_df["altitude_km"],
@@ -1160,32 +1225,29 @@ with tab1:
                 hoverinfo="skip",
             ))
 
-        # Live telemetry
         fig.add_trace(go.Scatter(
-            x=tdf["met_hours"], y=tdf["altitude_km"],
+            x=tdf["met_hours"], y=tdf["distance_earth_km"],
             mode="lines+markers", name="Live Telemetry",
             line=dict(color="#00d4ff", width=2.5),
             marker=dict(size=4, color="#00d4ff"),
-            hovertemplate="<b>MET:</b> %{x:.2f}h<br><b>Dist:</b> %{y:,.0f} km<extra></extra>"
+            hovertemplate="<b>MET:</b> %{x:.2f}h<br><b>Dist Earth:</b> %{y:,.0f} km<extra></extra>"
         ))
 
         anom = tdf[tdf["is_anomaly"]]
         if len(anom):
             fig.add_trace(go.Scatter(
-                x=anom["met_hours"], y=anom["altitude_km"],
+                x=anom["met_hours"], y=anom["distance_earth_km"],
                 mode="markers", name="Anomaly",
                 marker=dict(color="#ff3a3a", size=10, symbol="x"),
                 hovertemplate="<b>⚠️ ANOMALY</b><br>MET: %{x:.2f}h<extra></extra>"
             ))
 
-        # Completed milestone lines
         ms_status = get_milestone_status()
         for ms_name, ms_data in ms_status.items():
             ms_h = (ms_data["time_utc"] - MISSION_LAUNCH_UTC).total_seconds() / 3600
             if 0 <= ms_h <= now_h:
                 fig.add_vline(x=ms_h, line=dict(color="rgba(255,215,0,0.3)", width=1, dash="dot"))
 
-        # NOW marker
         fig.add_vline(x=now_h, line=dict(color="rgba(0,255,136,0.6)", width=2),
                       annotation_text="NOW", annotation_font_color="#00ff88",
                       annotation_position="top right")
@@ -1244,14 +1306,14 @@ with tab1:
             fig_sc = go.Figure()
             norm = tdf[~tdf["is_anomaly"]]
             fig_sc.add_trace(go.Scatter(
-                x=norm["velocity_km_s"], y=norm["altitude_km"],
+                x=norm["velocity_km_s"], y=norm["distance_earth_km"],
                 mode="markers", name="Nominal",
                 marker=dict(color=norm["anomaly_score"], colorscale="Plasma",
                             size=7, colorbar=dict(title="Score", thickness=10))
             ))
             if len(anom):
                 fig_sc.add_trace(go.Scatter(
-                    x=anom["velocity_km_s"], y=anom["altitude_km"],
+                    x=anom["velocity_km_s"], y=anom["distance_earth_km"],
                     mode="markers", name="Anomaly",
                     marker=dict(color="#ff3a3a", size=11, symbol="x")
                 ))
@@ -1259,7 +1321,7 @@ with tab1:
                 title="Feature Space", plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#fff", family="Rajdhani"),
                 xaxis=dict(title="Velocity (km/s)", gridcolor="rgba(255,255,255,0.08)"),
-                yaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.08)"),
+                yaxis=dict(title="Distance from Earth (km)", gridcolor="rgba(255,255,255,0.08)"),
                 height=400
             )
             st.plotly_chart(fig_sc, use_container_width=True, key="scatter_anom")
@@ -1395,6 +1457,7 @@ st.markdown("""
     <span class="tech-badge">Keplerian Mechanics</span>
     <span class="tech-badge">🛰️ NASA AROW (Tier 1)</span>
     <span class="tech-badge">🔭 JPL Horizons −1024 (Tier 2)</span>
+    <span class="tech-badge">🌙 JPL Horizons 301/Moon (Live)</span>
     <span class="tech-badge">⚙️ Physics Sim (Tier 3)</span>
   </div>
   <p style="margin-top:1.5rem;font-size:.72rem;color:rgba(255,255,255,0.35);">
