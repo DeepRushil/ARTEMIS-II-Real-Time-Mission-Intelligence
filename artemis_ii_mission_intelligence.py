@@ -1008,14 +1008,19 @@ def display_mission_success():
             penalty  = int((preds == -1).mean() * 3)
 
     model.update(completed, penalty)
-    prob   = model.predict()
-    lo, hi = model.credible_interval()
-    src    = st.session_state.get("data_source", "simulation")
-    sm     = SOURCE_META.get(src, SOURCE_META["simulation"])
-    penalty_txt = f" · Anomaly Penalty: {penalty}" if penalty else ""
-
     now_h = (datetime.now(timezone.utc) - MISSION_LAUNCH_UTC).total_seconds() / 3600
     mission_complete = now_h >= MISSION_TOTAL_HOURS
+
+    if mission_complete:
+        prob, lo, hi = 1.0, 1.0, 1.0
+    else:
+        prob   = model.predict()
+        lo, hi = model.credible_interval()
+
+    src = st.session_state.get("data_source", "simulation")
+    sm  = SOURCE_META.get(src, SOURCE_META["simulation"])
+    penalty_txt = f" · Anomaly Penalty: {penalty}" if (penalty and not mission_complete) else ""
+
     complete_badge = (
         '<div style="color:#00ff88;font-family:Space Mono,monospace;font-size:.9rem;margin-top:.5rem;">'
         '🌊 MISSION COMPLETE — SPLASHDOWN CONFIRMED</div>'
