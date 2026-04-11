@@ -238,6 +238,59 @@ footer {visibility: hidden;}
     font-size: 0.72rem;
     color: #00d4ff;
 }
+
+/* Thank-you banner buttons */
+.nasa-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.75rem 1.5rem;
+    border-radius: 50px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-decoration: none !important;
+    text-transform: uppercase;
+    transition: background 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+    position: relative;
+    z-index: 20;
+}
+.nasa-btn-cyan {
+    background: rgba(0,212,255,0.12);
+    border: 1.5px solid rgba(0,212,255,0.55);
+    color: #00d4ff !important;
+    box-shadow: 0 0 20px rgba(0,212,255,0.15);
+}
+.nasa-btn-cyan:hover {
+    background: rgba(0,212,255,0.28) !important;
+    box-shadow: 0 0 32px rgba(0,212,255,0.45) !important;
+    transform: translateY(-3px);
+}
+.nasa-btn-gold {
+    background: rgba(255,215,0,0.10);
+    border: 1.5px solid rgba(255,215,0,0.55);
+    color: #ffd700 !important;
+    box-shadow: 0 0 20px rgba(255,215,0,0.12);
+}
+.nasa-btn-gold:hover {
+    background: rgba(255,215,0,0.26) !important;
+    box-shadow: 0 0 32px rgba(255,215,0,0.40) !important;
+    transform: translateY(-3px);
+}
+.thankyou-wrap {
+    max-width: 860px;
+    margin: 1.5rem auto 1.5rem;
+    padding: 2.4rem 2.8rem;
+    background: linear-gradient(135deg, rgba(0,212,255,0.07) 0%, rgba(255,215,0,0.05) 100%);
+    border: 1.5px solid rgba(0,212,255,0.35);
+    border-radius: 20px;
+    text-align: center;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 0 60px rgba(0,212,255,0.12), inset 0 0 40px rgba(255,215,0,0.04);
+    position: relative;
+    z-index: 10;
+}
 </style>
 """
 
@@ -1058,106 +1111,56 @@ with col_m2:
 # ═══════════════════════════════════════════════════════════════════════════
 
 st.markdown("""
-<div style="
-  max-width: 860px;
-  margin: 1.5rem auto 1.5rem;
-  padding: 2.4rem 2.8rem;
-  background: linear-gradient(135deg, rgba(0,212,255,0.07) 0%, rgba(255,215,0,0.05) 100%);
-  border: 1.5px solid rgba(0,212,255,0.35);
-  border-radius: 20px;
-  text-align: center;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 0 60px rgba(0,212,255,0.12), inset 0 0 40px rgba(255,215,0,0.04);
-  position: relative;
-  z-index: 10;
-">
-  <div style="font-size: 2.8rem; margin-bottom: 0.6rem;">🌙🚀🌍</div>
+<div class="thankyou-wrap">
+  <div style="font-size:2.8rem;margin-bottom:0.6rem;">🌙🚀🌍</div>
 
   <h2 style="
-    font-family: 'Rajdhani', sans-serif;
-    font-size: clamp(1.6rem, 4vw, 2.4rem);
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    background: linear-gradient(90deg, #00d4ff 0%, #ffffff 50%, #ffd700 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin: 0 0 0.6rem;
-    text-transform: uppercase;
+    font-family:'Rajdhani',sans-serif;
+    font-size:clamp(1.6rem,4vw,2.4rem);
+    font-weight:700;
+    letter-spacing:0.12em;
+    background:linear-gradient(90deg,#00d4ff 0%,#ffffff 50%,#ffd700 100%);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    background-clip:text;
+    margin:0 0 0.6rem;
+    text-transform:uppercase;
   ">Thank You for Following Artemis II</h2>
 
   <p style="
-    font-family: 'Space Mono', monospace;
-    font-size: 0.82rem;
-    color: rgba(255,255,255,0.55);
-    line-height: 1.8;
-    max-width: 620px;
-    margin: 0 auto 1.6rem;
-    letter-spacing: 0.04em;
+    font-family:'Space Mono',monospace;
+    font-size:0.82rem;
+    color:rgba(255,255,255,0.55);
+    line-height:1.8;
+    max-width:620px;
+    margin:0 auto 1.6rem;
+    letter-spacing:0.04em;
   ">
     Humanity's first crewed lunar voyage since Apollo 17 — four astronauts, 252,021 miles from Earth,
     and a flawless free-return trajectory. Artemis II proved we are ready to return to the Moon. 🌕
   </p>
 
-  <div style="display: flex; justify-content: center; gap: 1.2rem; flex-wrap: wrap;">
-
-    <a href="https://www.nasa.gov/artemis-ii-multimedia/" target="_blank" style="
-      display: inline-flex;
-      align-items: center;
-      gap: 0.55rem;
-      padding: 0.75rem 1.5rem;
-      background: rgba(0,212,255,0.12);
-      border: 1.5px solid rgba(0,212,255,0.55);
-      border-radius: 50px;
-      color: #00d4ff;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-decoration: none;
-      text-transform: uppercase;
-      box-shadow: 0 0 20px rgba(0,212,255,0.15);
-    "
-    onmouseover="this.style.background='rgba(0,212,255,0.25)';this.style.boxShadow='0 0 30px rgba(0,212,255,0.4)';this.style.transform='translateY(-2px)'"
-    onmouseout="this.style.background='rgba(0,212,255,0.12)';this.style.boxShadow='0 0 20px rgba(0,212,255,0.15)';this.style.transform='translateY(0)'"
-    >
+  <div style="display:flex;justify-content:center;gap:1.2rem;flex-wrap:wrap;">
+    <a href="https://www.nasa.gov/artemis-ii-multimedia/"
+       target="_blank"
+       class="nasa-btn nasa-btn-cyan">
       📸 Artemis II Multimedia Gallery
     </a>
-
-    <a href="https://www.nasa.gov/mission/artemis-iii/" target="_blank" style="
-      display: inline-flex;
-      align-items: center;
-      gap: 0.55rem;
-      padding: 0.75rem 1.5rem;
-      background: rgba(255,215,0,0.10);
-      border: 1.5px solid rgba(255,215,0,0.55);
-      border-radius: 50px;
-      color: #ffd700;
-      font-family: 'Space Mono', monospace;
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-decoration: none;
-      text-transform: uppercase;
-      box-shadow: 0 0 20px rgba(255,215,0,0.12);
-    "
-    onmouseover="this.style.background='rgba(255,215,0,0.22)';this.style.boxShadow='0 0 30px rgba(255,215,0,0.35)';this.style.transform='translateY(-2px)'"
-    onmouseout="this.style.background='rgba(255,215,0,0.10)';this.style.boxShadow='0 0 20px rgba(255,215,0,0.12)';this.style.transform='translateY(0)'"
-    >
+    <a href="https://www.nasa.gov/mission/artemis-iii/"
+       target="_blank"
+       class="nasa-btn nasa-btn-gold">
       🌕 What's Next — Artemis III Mission
     </a>
-
   </div>
 
   <p style="
-    margin-top: 1.4rem;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.65rem;
-    color: rgba(255,255,255,0.22);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+    margin-top:1.4rem;
+    font-family:'Space Mono',monospace;
+    font-size:0.65rem;
+    color:rgba(255,255,255,0.22);
+    letter-spacing:0.12em;
+    text-transform:uppercase;
   ">GODSPEED ARTEMIS II · AD ASTRA PER ASPERA</p>
-
 </div>
 """, unsafe_allow_html=True)
 
