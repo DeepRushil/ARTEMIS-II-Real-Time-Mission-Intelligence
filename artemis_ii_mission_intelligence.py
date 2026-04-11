@@ -1160,7 +1160,7 @@ st.markdown("""
     color:rgba(255,255,255,0.22);
     letter-spacing:0.12em;
     text-transform:uppercase;
-  ">GODSPEED ARTEMIS II · AD ASTRA PER ASPERA</p>
+  ">GODSPEED ARTEMIS II · For All Humanity</p>
 </div>
 """, unsafe_allow_html=True)
 
